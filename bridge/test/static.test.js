@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
@@ -172,6 +173,45 @@ function denied(probe) {
     throw e;
   }
   return false;
+}
+
+// static.js reaches the file system through properties of the default export of node:fs/promises, read at every
+// call, so a test can stand in for one of them and make a call fail with a code the kernel will not give on demand
+// (EIO, EPERM, EMFILE). The namespace import cannot be assigned to; the default export can. Captured here, before
+// any test replaces them, so that a replacement can hand every other path to the real function and restore it.
+const REAL_FS = { realpath: fsp.realpath, lstat: fsp.lstat, open: fsp.open };
+// Only these two errors prove that nothing is there. Any other code means an entry may exist that this process
+// cannot examine, and the shell must not stand in for it.
+const PROVES_ABSENCE = ['ENOENT', 'ENOTDIR'];
+const PROVES_NOTHING = ['EACCES', 'EPERM', 'EIO', 'EMFILE', 'EBUSY', 'ELOOP', 'ENAMETOOLONG'];
+const NOT_MET = 'static.js never made the call this test makes fail, so the test proves nothing';
+
+/** An error shaped as fs throws it. static.js reads only `code`; the rest makes a failure message read like the real thing. */
+function fsError(code, syscall, target) {
+  return Object.assign(new Error(`${code}: injected failure, ${syscall} '${target}'`), { errno: -os.constants.errno[code], code, syscall, path: target });
+}
+
+/** A stand-in for `fsp.lstat` or `fsp.open` that always fails with `code`. */
+const failing = (code, syscall) => (_real, target) => Promise.reject(fsError(code, syscall, target));
+
+/**
+ * Runs `run` with `fsp[name]` replaced: a call for exactly `target` goes to `fake(real, ...args)` and every other
+ * call to the real function, so nothing else in the process can tell. Restored even if `run` throws. `met` counts
+ * the calls for `target`, so that a test shows its failure was reached instead of assuming it.
+ */
+async function injecting(name, target, fake, run) {
+  let met = 0;
+  fsp[name] = (p, ...rest) => {
+    if (p !== target) return REAL_FS[name](p, ...rest);
+    met += 1;
+    return fake(REAL_FS[name], p, ...rest);
+  };
+  try {
+    const result = await run();
+    return { result, met };
+  } finally {
+    fsp[name] = REAL_FS[name];
+  }
 }
 
 describe('static web client', () => {
@@ -598,6 +638,90 @@ describe('static web client', () => {
       await bridge.close();
       fs.rmSync(own.tmp, { recursive: true, force: true });
     }
+  });
+
+  // The absence rule at its two decision points, with the errors the kernel will not give on demand injected.
+  // Every request is an extensionless HTML navigation, so the shell is the answer exactly when static.js calls the
+  // entry "missing"; the files hold SECRET so that serving one is caught.
+  describe('the absence rule with file system errors injected', () => {
+    const html = { headers: { accept: NAVIGATION } };
+    const shell = (r, label) => assertServed(r, INDEX, 'text/html; charset=utf-8', 'no-cache', label);
+    let realRoot;
+    // static.js compares against the root's real path, so that is where a call has to be aimed.
+    const at = (name) => path.join(realRoot, name);
+    /** An extensionless file that exists, so that only the injected failure stands between its request and the file. */
+    async function withFile(name, run) {
+      const file = path.join(site.root, name);
+      fs.writeFileSync(file, SECRET);
+      try { return await run(at(name)); } finally { fs.rmSync(file, { force: true }); }
+    }
+
+    before(() => { realRoot = fs.realpathSync(site.root); });
+    after(() => {
+      for (const [name, real] of Object.entries(REAL_FS)) assert.equal(fsp[name], real, `fsp.${name} was left replaced`);
+    });
+
+    // lstat decides inside whyUnresolved, which runs when realpath fails: here because nothing is at the path.
+    for (const code of PROVES_NOTHING) {
+      test(`lstat fails with ${code}: the entry may exist, so a 404 and never the shell`, async () => {
+        const { result, met } = await injecting('lstat', at('injected-lstat'), failing(code, 'lstat'), () => hit(base, '/injected-lstat', html));
+        assert.ok(met > 0, NOT_MET);
+        assertRefused(result, 404, `lstat ${code}`);
+      });
+    }
+    for (const code of PROVES_ABSENCE) {
+      test(`lstat fails with ${code}: nothing is there, so the shell`, async () => {
+        const { result, met } = await injecting('lstat', at('injected-lstat'), failing(code, 'lstat'), () => hit(base, '/injected-lstat', html));
+        assert.ok(met > 0, NOT_MET);
+        shell(result, `lstat ${code}`);
+      });
+    }
+
+    // open decides inside openInside, after realpath has said that the file is there.
+    for (const code of PROVES_NOTHING) {
+      test(`open fails with ${code} on a file that exists: a 404 and never the shell`, () => withFile('injected-open', async (target) => {
+        const { result, met } = await injecting('open', target, failing(code, 'open'), () => hit(base, '/injected-open', html));
+        assert.ok(met > 0, NOT_MET);
+        assertRefused(result, 404, `open ${code}`);
+      }));
+    }
+    for (const code of PROVES_ABSENCE) {
+      test(`open fails with ${code}: the file is gone, so the shell`, () => withFile('injected-open', async (target) => {
+        const { result, met } = await injecting('open', target, failing(code, 'open'), () => hit(base, '/injected-open', html));
+        assert.ok(met > 0, NOT_MET);
+        shell(result, `open ${code}`);
+      }));
+    }
+    test('a file removed between realpath and open is simply missing: the shell', () => withFile('injected-race', async (target) => {
+      // Nothing is made up here: the file really goes, and the real open fails with the kernel's own ENOENT.
+      const removeThenOpen = (open, p, ...rest) => { fs.unlinkSync(p); return open(p, ...rest); };
+      const { result, met } = await injecting('open', target, removeThenOpen, () => hit(base, '/injected-race', html));
+      assert.ok(met > 0, NOT_MET);
+      shell(result, 'removed after realpath');
+    }));
+
+    test('stat fails with EIO on a file that opened: a 404, and the handle is closed', () => withFile('injected-stat', async (target) => {
+      let opened;
+      let closes = 0;
+      // The real file is opened and the real handle is what has to be closed: only stat() and close() are stood in for.
+      const wrapped = async (open, p, ...rest) => {
+        opened = await open(p, ...rest);
+        return {
+          stat: () => Promise.reject(fsError('EIO', 'fstat', p)),
+          close: () => { closes += 1; return opened.close(); },
+        };
+      };
+      try {
+        const { result, met } = await injecting('open', target, wrapped, () => hit(base, '/injected-stat', html));
+        assert.ok(met > 0, NOT_MET);
+        assertRefused(result, 404, 'stat EIO');
+        // The handle belongs to openInside until it hands it to sendFile, so a refusal closes it, and only once.
+        assert.equal(closes, 1, `close was called ${closes} times on the handle that stat failed on`);
+        assert.equal(opened.fd, -1, 'the descriptor is still open'); // a FileHandle reports -1 once closed
+      } finally {
+        await opened?.close(); // a handle the code under test left open must not outlive the test
+      }
+    }));
   });
 });
 
