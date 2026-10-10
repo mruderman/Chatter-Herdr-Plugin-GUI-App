@@ -1,7 +1,7 @@
-**Updated:** 2026-10-10 · `m3-client` at `aafb18a` (T0, T1, T1b, T1c, T2, T2b, T3 and T4 merged; docs) · `npm test` 63 pass; client typecheck clean, 435 unit tests pass, build and check:dist green, T4's smoke spec and canaries pass against T3's shell · G0 and G1 closed · running: T5, T8b, T1d
+**Updated:** 2026-10-10 · `m3-client` with T0, T1, T1b, T1c, T1d, T2, T2b, T3 and T4 merged; `npm test` 83 pass / 0 fail / 0 skipped; client typecheck clean, 435 unit tests pass, build and check:dist green · G0 and G1 closed · running: T5, T8b, T8a
 
 ## Where we are
-- Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T2, T2b, T3, T4 (see `git log`); G0 and G1 closed. Wave 2 running: T5 (real store), T8b (composer); T1d (static-server tests) finishing. Queued for free slots: T8a (conversations and feed), then T7 (admin), T6 (board and members), T9 (notifications); T10 (integration and the gate) after them.
+- Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4 (see `git log`); G0 and G1 closed. Wave 2 running: T5 (real store), T8b (composer), T8a (conversations and feed). Queued for free slots: T7 (admin), T6 (board and members), T9 (notifications); T10 (integration and the gate) after them.
 - Branch: `m3-client` (from `main` at `2e09e44`), not pushed. Nothing is pushed without Flan's go-ahead.
 - Agreed 2026-10-09: go; `/brief` and `/role` deferred (Q2); Claude subagents code, Codex reviews read-only; run to the M3 gate; up to 3 executors at once.
 - Wave 1 started before G0 fully closed, on purpose: T1b only hardened edge cases of the static server (symlink escapes, response framing), not the surface Wave 1 consumes (CSP, headers, SPA fallback). G1 cannot close before G0 does.
@@ -11,10 +11,9 @@ All run in the background; each completion notice returns to this session. Workt
 
 | Task | Executor | Holds | When it lands |
 |---|---|---|---|
-| T1d error-injection tests for the absence rule (tests only; Codex round 3 found no defect, but I ran its proposed mutations and four are unguarded: adding EIO, EPERM or EMFILE to `ABSENT`, and the `open` catch refusing unconditionally; brief in the plan) | Sonnet, running | `bridge/test/static.test.js` | rerun the suite, all my mutation sets plus `mutate-round3.sh` (the four must now be caught); commit; cherry-pick; no Codex round (no production change) |
 | T5 session and sync, the real store (brief in the plan; the fake store is the behavioural reference; streams for every non-orphan repo up to 8) | Opus, running (BASE `2ef5be0`) | new files under `client/src/state/` (not `types.ts`, `fake.ts`, `fake.test.ts`) | typecheck, unit and real-bridge integration tests green; read `store.ts` and the conformance suite myself; my own mutation spot-checks; commit; cherry-pick |
 | T8b composer and mention suggestions (brief in the plan; follows the UI contract section 8) | Opus, running (BASE `aafb18a`) | `client/src/features/chat/composer/**` | tests, build, check:dist, the agent's real-browser axe results; I read the combobox code; mutation spot-checks; commit; cherry-pick |
-| T8a conversations and feed, announcements, `ChatView` (brief in the plan) | Opus, queued: next free slot | `client/src/features/chat/{conversations,feed,announcements}/**`, `ChatView.tsx`, `index.ts` | same |
+| T8a conversations and feed, announcements, `ChatView` (brief in the plan) | Opus, running (BASE `086ba15`) | `client/src/features/chat/{conversations,feed,announcements}/**`, `ChatView.tsx`, `index.ts` | tests, build, check:dist, the agent's real-browser axe and scroll results; I read the feed code; mutation spot-checks; commit; cherry-pick |
 
 Leftover finished worktrees (T0 and T1) stay until the milestone ends; their commits are already cherry-picked.
 
