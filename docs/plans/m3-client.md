@@ -111,6 +111,27 @@ You write the certifying tests, so you must not read or write any UI source. Wor
 - Acceptance per task: `checkpoint-verification` (call-sites and the real runtime path), then `convention-commit-gate` (constants rather than literals, no suppressions, existing patterns). An executor's report is a hint, not evidence.
 - G0 and G2 follow `adversarial-review-to-go` with the diff template. Codex runs read-only, so it proposes seeded mutations by reading and I execute them.
 
+## Dispatch prompt template
+Use `subagent_type: general-purpose`, `isolation: worktree`, background, `model` per the assignment table. Fill the angle brackets; keep the rest.
+
+```
+You are executing ONE task, <Tn>, of the M3 plan in this repository. Your working directory is your own git worktree; every path below is relative to its root.
+
+Step 0: run `git log -1 --format=%H`. It must equal <BASE>. The harness builds worktrees from `main`, so if you are behind, run `git merge --ff-only m3-client` (the branch is visible from your worktree) and check again. If it still differs, stop and report.
+
+1. Read `docs/executor-context.md` and, in `docs/plans/m3-client.md`, the sections "Decisions", "Findings that shape the plan" and "<task section title>". Do not edit those docs.
+2. Do exactly <Tn> and stop. Do not commit, merge, rebase or push. Leave the changes in your worktree and report.
+
+Context for this dispatch
+- BASE <sha> (branch m3-client). Baseline: `CHATTER_JS=/home/cyanfam/src/chatter/dist/bin/chatter.js npm test` at the root gives 30 pass, 0 fail, 0 skipped; it must still pass when you finish.
+- Other executors running now: <task and the paths it holds>. You hold: <paths>. Touch nothing else, not even to fix an error you see.
+- <permissions: npm registry approved for vetted pins; downloads of browsers or binaries are not>
+- Reconcile the plan against what the code and the registry really say; if the plan looks wrong or ambiguous, stop and say so rather than improvising. If a Write or Edit is refused by a hook, stop and report; do not look for another way to write.
+- Unsure about a library API: fetch current docs with ctx7 as the executor context describes.
+
+Report (15 lines or fewer, executor-context section 8) and also state: <task-specific items>.
+```
+
 ## Test strategy
 - **Bridge** (`node:test`, real Chatter): static and CSP, tests first; the existing 30 untouched.
 - **Client unit** (Vitest): SSE parsing, backoff, resume and bye handling; merge, dedupe, gaps; grouping and day separators; new marker; mention parsing; notification gating; plain-text rendering.
