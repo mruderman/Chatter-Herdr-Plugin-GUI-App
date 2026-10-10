@@ -1,20 +1,20 @@
-**Updated:** 2026-10-10 · `m3-client` at `2c60253` (T0 and T1 merged; docs) · `npm test` 54 pass / 0 fail / 0 skipped; client: typecheck, 30 unit tests, build and check:dist pass · Wave 0 closing, Wave 1 started
+**Updated:** 2026-10-10 · `m3-client` at `35a7315` (T0, T1 and T1b merged; docs) · `npm test` 59 pass / 0 fail / 0 skipped; client: typecheck, 30 unit tests, build and check:dist pass · Wave 0 closing (Codex round 2), Wave 1 running
 
 ## Where we are
-- Phase: M3 (web client core). Done: T0 at `d7ceb1f`, T1 at `616ccb9`. Open: G0 (T1b plus Codex round 2). Running: T1b, T2, T4. Waiting for a slot: T3.
+- Phase: M3 (web client core). Done: T0 at `d7ceb1f`, T1 at `616ccb9`, T1b at `35a7315`. Open: G0 (Codex round 2 on `35a7315`). Running: T2, T3, T4.
 - Branch: `m3-client` (from `main` at `2e09e44`), not pushed. Nothing is pushed without Flan's go-ahead.
 - Agreed 2026-10-09: go; `/brief` and `/role` deferred (Q2); Claude subagents code, Codex reviews read-only; run to the M3 gate; up to 3 executors at once.
-- Wave 1 started before G0 fully closed, on purpose: T1b only hardens edge cases of the static server (symlink escapes, response framing), not the surface Wave 1 consumes (CSP, headers, SPA fallback). G1 cannot close before G0 does.
+- Wave 1 started before G0 fully closed, on purpose: T1b only hardened edge cases of the static server (symlink escapes, response framing), not the surface Wave 1 consumes (CSP, headers, SPA fallback). G1 cannot close before G0 does.
 
 ## In flight
-All run in the background; each completion notice returns to this session. Worktrees are under `.claude/worktrees/`; `git worktree list` shows them (T2 and T4 at BASE `2c60253`, T1b at `2cc944c`).
+All run in the background; each completion notice returns to this session. Worktrees are under `.claude/worktrees/`; `git worktree list` shows them (T2 and T4 at BASE `2c60253`, T3 at `a2adec9`).
 
 | Task | Executor | Holds | When it lands |
 |---|---|---|---|
-| T1b static follow-ups (escape-symlink fallback, Content-Length framing, descriptor-closure test; brief in the plan) | Opus | `bridge/src/static.js`, `bridge/test/static.test.js` | rerun tests, my reproductions (`scratchpad/verify-t1-findings.sh`) and all 17 mutations (`mutate-t1-extra.sh`); commit; cherry-pick; Codex round 2 on the patched sites (target: zero surviving findings) |
+| G0 round 2: Codex CLI, `--sandbox read-only`, fresh session on `35a7315`, patched sites first | Codex | prompt `scratchpad/codex-g0/prompt-round2-final.md`, answer `scratchpad/codex-g0/review-round2.md`; the exit notice returns to this session | re-verify every finding on the source; GO means zero surviving findings (stop rule: findings must fall across rounds; round 1 had 3 Medium plus 1 Low) |
 | T2 API module and state contract | Opus | `client/src/api/**`, `client/src/state/types.ts`, `fake.ts`, `client/test/fixtures/**`, `client/scripts/record-fixtures.mjs` | fixtures regenerate with no token or temp path in them; read the store contract myself; diff the types against live responses (G1); commit; cherry-pick |
 | T4 E2E harness and blind gate specs | Opus, blind to UI source | `client/e2e/**`, `client/playwright.config.ts` | smoke green; every other spec fails at an expected selector; read the specs for tautologies; the mutation checks come at T10 |
-| T3 design system and shell | Sonnet | `client/src/styles/**`, `features/shell/**`, `features/index.ts`, `app.tsx`, `main.tsx`, `test/toolchain.test.tsx` (retarget only) | dispatch the moment a slot frees (width limit 3) |
+| T3 design system and shell | Sonnet | `client/src/styles/**`, `features/shell/**`, `features/index.ts`, `app.tsx`, `main.tsx`, `test/toolchain.test.tsx` (retarget only) | running (dispatched when T1b freed its slot); on landing: run its tests, build, check:dist; look at the shell in a real browser (axe per theme); check the contrast assertions against `tokens.css` |
 
 Leftover finished worktrees (T0 and T1) stay until the milestone ends; their commits are already cherry-picked.
 
