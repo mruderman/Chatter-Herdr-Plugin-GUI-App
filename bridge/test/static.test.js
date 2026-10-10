@@ -161,6 +161,19 @@ async function assertUnchanged(withStatic, without, rawPath, opts = {}) {
   return a;
 }
 
+// Root, CAP_DAC_OVERRIDE and filesystems that ignore mode bits walk through a mode-000 entry, so whether
+// access is really denied is checked on the fixture itself and never assumed.
+const NO_DENIAL = 'mode bits do not deny this process access here (root, CAP_DAC_OVERRIDE or a filesystem that ignores them), so no request can meet EACCES';
+
+/** Whether `probe` fails with EACCES. Any other outcome but success is a broken fixture, not a reason to skip. */
+function denied(probe) {
+  try { probe(); } catch (e) {
+    if (e.code === 'EACCES') return true;
+    throw e;
+  }
+  return false;
+}
+
 describe('static web client', () => {
   let site;
   let store;
@@ -428,6 +441,73 @@ describe('static web client', () => {
     }
   });
 
+  test('below a directory the process cannot search, every path gets the same refusal and none gets the shell', async (t) => {
+    const html = { headers: { accept: NAVIGATION } };
+    const locked = path.join(site.root, 'locked');
+    // Everything is made before the mode changes: nothing inside a mode-000 directory can be created or removed.
+    fs.mkdirSync(path.join(locked, 'dir'), { recursive: true });
+    fs.symlinkSync(path.join(site.tmp, 'nowhere'), path.join(locked, 'dangling'));
+    try {
+      fs.chmodSync(locked, 0o000);
+      if (!denied(() => fs.lstatSync(path.join(locked, 'dangling')))) return t.skip(NO_DENIAL);
+      // lstat fails with EACCES here, which proves nothing about the entry. If a link that resolves nowhere,
+      // a missing child and a real directory behind the lock were answered differently, the fallback would
+      // tell a caller which of them exist.
+      const plain = await hit(base, '/missing.js');
+      assertRefused(plain, 404, '/missing.js');
+      for (const p of ['/locked/dangling', '/locked/anything', '/locked/dir/deep']) {
+        const r = await hit(base, p, html);
+        assertRefused(r, 404, p);
+        assert.equal(r.text, plain.text, `${p}: its body tells it apart from a plain refusal`);
+      }
+      // Control: a refusal that covered everything would pass the lines above.
+      for (const p of ['/a/b/c', '/sub/missing', '/sub/x/y/z']) {
+        assertServed(await hit(base, p, html), INDEX, 'text/html; charset=utf-8', 'no-cache', p);
+      }
+    } finally {
+      fs.chmodSync(locked, 0o755);
+      fs.rmSync(locked, { recursive: true, force: true });
+    }
+  });
+
+  test('an entry that exists but cannot be opened is a 404, not a client route', async (t) => {
+    const html = { headers: { accept: NAVIGATION } };
+    // Extensionless, so the fallback's other conditions hold and only the refusal keeps the shell back.
+    const file = path.join(site.root, 'unreadable');
+    const directory = path.join(site.root, 'unreadable-dir');
+    fs.writeFileSync(file, SECRET);
+    fs.mkdirSync(directory);
+    try {
+      fs.chmodSync(file, 0o000);
+      fs.chmodSync(directory, 0o000);
+      for (const entry of [file, directory]) {
+        if (!denied(() => fs.closeSync(fs.openSync(entry, 'r')))) return t.skip(NO_DENIAL);
+      }
+      assertRefused(await hit(base, '/unreadable', html), 404, '/unreadable');
+      assertRefused(await hit(base, '/unreadable-dir', html), 404, '/unreadable-dir');
+    } finally {
+      fs.chmodSync(file, 0o644);
+      fs.chmodSync(directory, 0o755);
+      fs.rmSync(file, { force: true });
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('a path below a regular file is an ordinary missing path: ENOTDIR proves absence', async () => {
+    const html = { headers: { accept: NAVIGATION } };
+    for (const p of ['/robots.txt/x', '/robots.txt/x/y', '/sub/index.html/x']) {
+      assertServed(await hit(base, p, html), INDEX, 'text/html; charset=utf-8', 'no-cache', p);
+      assertRefused(await hit(base, p), 404, `${p} without an HTML Accept`);
+    }
+  });
+
+  test('a name too long for the file system is refused, not a client route: ENAMETOOLONG proves nothing', async () => {
+    // Needs no privilege to set up, so this also covers the refusal where the permission tests skip.
+    for (const p of [`/${'a'.repeat(300)}`, `/${'a'.repeat(300)}/b`]) {
+      assertRefused(await hit(base, p, { headers: { accept: NAVIGATION } }), 404, `${p.length} characters`);
+    }
+  });
+
   test('an empty file is a 200 with an empty body', async () => {
     const empty = path.join(site.root, 'empty.txt');
     fs.writeFileSync(empty, '');
@@ -486,6 +566,8 @@ describe('static web client', () => {
     const onWarning = (w) => { if (/garbage collection/.test(w.message)) collected.push(w.message); };
     process.on('warning', onWarning);
     fs.writeFileSync(path.join(own.root, 'assets', 'held-0001.bin'), Buffer.alloc(BIG, 1));
+    // An empty file is never read, so nothing but the final close gives its descriptor back.
+    fs.writeFileSync(path.join(own.root, 'empty.txt'), '');
     try {
       const baseline = openFiles();
       // A descriptor is closed a moment after its response ends.
@@ -502,9 +584,9 @@ describe('static web client', () => {
       }
       const html = { headers: { accept: NAVIGATION } };
       for (let round = 0; round < 10; round++) {
-        for (const p of ['/', '/assets/app-3f2a.js', '/linked.js', '/my%20file.txt']) await hit(ownBase, p);
+        for (const p of ['/', '/assets/app-3f2a.js', '/linked.js', '/my%20file.txt', '/empty.txt']) await hit(ownBase, p);
         await hit(ownBase, '/chat/general', html);
-        for (const p of ['/', '/robots.txt', '/chat/general']) await hit(ownBase, p, { method: 'HEAD', ...html });
+        for (const p of ['/', '/robots.txt', '/empty.txt', '/chat/general']) await hit(ownBase, p, { method: 'HEAD', ...html });
         // Refusals, among them directories, which are opened before they are turned away.
         for (const p of ['/sub', '/assets', '/missing.js', '/escape.txt', '/escape-dir/not-created', '/%ZZ', '/.env']) await hit(ownBase, p, html);
       }

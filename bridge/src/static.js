@@ -37,7 +37,13 @@ const REFUSALS = {
   404: { code: 'not_found', message: 'no such file' },
 };
 const MISSING = 'missing';
+// Refused: a 404 that never falls back to the shell. An escape, but also an entry that exists and
+// resolves nowhere, or cannot be examined.
 const OUTSIDE = 'outside';
+// Only these two errors prove that nothing is there. EACCES, ELOOP, ENAMETOOLONG, EIO and the rest mean
+// an entry may exist that this process cannot examine, and the shell must not stand in for it.
+const ABSENT = new Set(['ENOENT', 'ENOTDIR']);
+const isAbsent = (err) => ABSENT.has(err?.code);
 
 /**
  * The API area ('v1' or 'healthz') a URL path belongs to, or null: the first non-empty segment,
@@ -89,15 +95,16 @@ function refuse(req, res, status) {
 /**
  * Why `candidate` does not resolve: OUTSIDE if the deepest ancestor that does resolve lands outside
  * the root, or if the entry just below that ancestor exists but resolves nowhere (a dangling symlink
- * or a loop); otherwise MISSING. Past an escape the answer then cannot depend on what exists out
- * there, so the SPA fallback cannot be used to probe it. Nothing is opened here.
+ * or a loop), or may exist but cannot be examined (no search permission, an I/O error); MISSING only
+ * when that entry is confirmed absent. Past an escape the answer then cannot depend on what exists
+ * out there, so the SPA fallback cannot be used to probe it. Nothing is opened here.
  */
 async function whyUnresolved(root, candidate) {
   for (let child = candidate; child !== root; child = path.dirname(child)) {
     let parent;
     try { parent = await fsp.realpath(path.dirname(child)); } catch { continue; }
     if (parent !== root && !isInside(root, parent)) return OUTSIDE;
-    try { await fsp.lstat(child); } catch { return MISSING; }
+    try { await fsp.lstat(child); } catch (err) { if (isAbsent(err)) return MISSING; }
     return OUTSIDE;
   }
   return OUTSIDE; // the root itself no longer resolves
@@ -105,21 +112,26 @@ async function whyUnresolved(root, candidate) {
 
 /**
  * Opens the regular file at `candidate`, following symlinks only to targets inside `root`.
- * Returns { handle, size }, MISSING or OUTSIDE. The handle is opened on the resolved path, so the
- * file streamed is the file that was checked.
+ * Returns { handle, size }, MISSING or OUTSIDE (which includes an entry that is there but cannot be
+ * opened). The handle is opened on the resolved path, so the file streamed is the file that was checked.
  */
 async function openInside(root, candidate) {
   let real;
   try { real = await fsp.realpath(candidate); } catch { return whyUnresolved(root, candidate); }
   if (!isInside(root, real)) return OUTSIDE;
   let handle;
+  let refused = false;
   try {
     handle = await fsp.open(real, 'r');
     const stat = await handle.stat();
     if (stat.isFile()) return { handle, size: stat.size };
-  } catch { /* gone or unreadable since realpath: the same as missing */ }
+  } catch (err) {
+    // ENOENT or ENOTDIR: removed since realpath, so missing. Any other error (EACCES, EIO ...) means
+    // the entry is there and cannot be served.
+    refused = !isAbsent(err);
+  }
   await handle?.close();
-  return MISSING;
+  return refused ? OUTSIDE : MISSING;
 }
 
 async function sendFile(req, res, { handle, size }, type, cache) {
