@@ -1,7 +1,7 @@
 **Updated:** 2026-10-10 09:20 PDT · `m3-client` with T0 to T5, T8a and T8b merged (762 client tests with real Chatter, 83 bridge tests, build and check:dist green) · **USAGE LIMIT REACHED, resets 10:30am PDT**: T7 and T9 were cut off by it, T6 probably will be too
 
 ## Where we are
-- Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5, T8a, T8b (see `git log`); G0 and G1 closed. Wave 2 is paused: the account's session limit (HTTP 429) stopped T7 and T9 mid-task, and T6 was still running when it hit. Their partial work is uncommitted in their worktrees. Still to do: T7, T6, T9, then T10 (integration and the gate) and G2.
+- Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5, T8a, T8b (see `git log`); G0 and G1 closed. Wave 2 is paused: the account's session limit (HTTP 429) stopped T7 and T9 mid-task, and T6 had just finished. Their partial work is uncommitted in their worktrees. Still to do: T7, T6, T9, then T10 (integration and the gate) and G2.
 - Branch: `m3-client` (from `main` at `2e09e44`), not pushed. Nothing is pushed without Flan's go-ahead.
 - Agreed 2026-10-09: go; `/brief` and `/role` deferred (Q2); Claude subagents code, Codex reviews read-only; run to the M3 gate; up to 3 executors at once.
 
@@ -11,7 +11,7 @@ All run in the background; each completion notice returns to this session. Workt
 | Task | Executor | Holds | When it lands |
 |---|---|---|---|
 | T7 admin panel (brief in the plan) | FAILED by the session limit, not by a defect: partial work, uncommitted, in its worktree (20 files, about 3,200 lines under `client/src/features/admin/`, including the token dialog and a real-bridge integration test; it was updating tests when cut off) | Sonnet, stopped | `client/src/features/admin/**` | after the reset: resume it with SendMessage (its context is intact) or re-dispatch from the plan brief; then verify as planned, reading the token dialog line by line |
-| T6 board and members views (brief in the plan) | running when the limit hit; will probably fail the same way; its worktree has 2 changed paths so far | Sonnet | `client/src/features/board/**`, `client/src/features/members/**` | after the reset: check its worktree (`git worktree list`, `git status`), resume or re-dispatch, then verify |
+| T6 board and members views (brief in the plan) | FINISHED before the limit hit; built and left uncommitted in its worktree, NOT yet verified or merged. Its report: 704 client tests pass in its tree, typecheck, build and check:dist pass, 35 mutations caught, axe 110 runs with 0 violations under the real CSP, the 15 s refresh is skipped while the page is hidden and fetches at once when it becomes visible | Sonnet, done | `client/src/features/board/**`, `client/src/features/members/**` | after the reset: verify (footprint, typecheck, tests with `CHATTER_JS`, build, check:dist, no host paths rendered, my mutation spot-checks), commit in the worktree, cherry-pick |
 | T9 desktop notifications (brief in the plan) | FAILED by the session limit: barely started (a skeleton and its first red test run), uncommitted | Sonnet, stopped | `client/src/features/notify/**` | after the reset: resume it with SendMessage or re-dispatch from the plan brief, then verify |
 
 Finished worktrees (T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5) stay until the milestone ends; their commits are already cherry-picked. Clean them up at the end with `git worktree list`, `git worktree unlock`, `git worktree remove` and deleting the `worktree-agent-*` branches.
@@ -24,6 +24,11 @@ Finished worktrees (T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5) stay until the m
 - Only the "drop the CSP" mutation can turn a spec red today. "Break `canSee`" and "drop the `@everyone` rule" cannot show anything until the real UI exists, because those specs fail at sign-in now. Do not read "still red" as "caught" at G1; run the three mutations at T10 against the integrated UI and require each to flip its named spec.
 - T4's specs use tolerant selectors where the contract was ambiguous; the rulings are now in `docs/ui-contract.md` section 8, so T10 may tighten them. E2E does not cover announcements, the "New messages" marker, day separators, "Load older messages", Board and Members contents, or 200% text; unit tests with the fake store carry those. Add E2E for any of them if time allows (day separators need rows with older timestamps, which only a direct write to the scratch Chatter database can seed; `seedAgent` in the test helpers already sets that precedent).
 - T4's specs read Chatter's table directly (`countChatterRows`); the harness world is: admin `flan`, humans `hana` and `ivo`, computational `kai`, agent `codex`, repos "main" and "sidecar".
+
+## Carried from T6 to T10
+- `ViewDefinition.component` takes no props, so T10 wraps `BoardView({ api, repoKey })` (repoKey is `string | null`: null shows text and makes no request) and `MembersView({ directory })`.
+- Open, not implemented: a revoked member stays signed in with connection `revoked`, so a Board left open keeps polling `/board` every 15 s and each call gets a 401 `bad_token`; the revoked E2E counts only `/stream`, so nothing catches it. T10 should not render Board while revoked, or the loader should stop after a 401 or 403.
+- Decisions T6 made: table captions "Agents" and "Tasks" are visually hidden; the Agents column is "Harness"; a first-load failure is an alert while a failed later refresh keeps the old board with a polite status. Unverified: real screen readers, Firefox, Safari; headless Chromium keeps `visibilityState` visible, so the hidden-page path was set by script.
 
 ## Carried from T8a to T10
 - Ruling given: T8a's two extra `markRead` triggers (the reader scrolling to the bottom; the page becoming visible again) are accepted, inside the brief's intent; a repeat for the same newest id is skipped.
