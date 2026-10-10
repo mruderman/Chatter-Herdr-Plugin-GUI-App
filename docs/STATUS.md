@@ -4,10 +4,9 @@
 - Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5 (see `git log`); G0 and G1 closed. Wave 2 running: T8a (conversations and feed), T8b (composer), T7 (admin panel). Queued for free slots: T6 (board and members), T9 (notifications); T10 (integration and the gate) after them.
 - Branch: `m3-client` (from `main` at `2e09e44`), not pushed. Nothing is pushed without Flan's go-ahead.
 - Agreed 2026-10-09: go; `/brief` and `/role` deferred (Q2); Claude subagents code, Codex reviews read-only; run to the M3 gate; up to 3 executors at once.
-- Wave 1 started before G0 fully closed, on purpose: T1b only hardened edge cases of the static server (symlink escapes, response framing), not the surface Wave 1 consumes (CSP, headers, SPA fallback). G1 cannot close before G0 does.
 
 ## In flight
-All run in the background; each completion notice returns to this session. Worktrees are under `.claude/worktrees/`; `git worktree list` shows them (T2 and T4 at BASE `2c60253`, T3 at `a2adec9`).
+All run in the background; each completion notice returns to this session. Worktrees are under `.claude/worktrees/`; `git worktree list` shows them (T8a at BASE `086ba15`, T8b at `aafb18a`, T7 at `68e5d0f`).
 
 | Task | Executor | Holds | When it lands |
 |---|---|---|---|
@@ -15,7 +14,7 @@ All run in the background; each completion notice returns to this session. Workt
 | T8b composer and mention suggestions (brief in the plan; follows the UI contract section 8) | Opus, running (BASE `aafb18a`) | `client/src/features/chat/composer/**` | tests, build, check:dist, the agent's real-browser axe results; I read the combobox code; mutation spot-checks; commit; cherry-pick |
 | T8a conversations and feed, announcements, `ChatView` (brief in the plan) | Opus, running (BASE `086ba15`) | `client/src/features/chat/{conversations,feed,announcements}/**`, `ChatView.tsx`, `index.ts` | tests, build, check:dist, the agent's real-browser axe and scroll results; I read the feed code; mutation spot-checks; commit; cherry-pick |
 
-Leftover finished worktrees (T0 and T1) stay until the milestone ends; their commits are already cherry-picked.
+Finished worktrees (T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5) stay until the milestone ends; their commits are already cherry-picked. Clean them up at the end with `git worktree list`, `git worktree unlock`, `git worktree remove` and deleting the `worktree-agent-*` branches.
 
 ## For Flan (surfaced, with a default I am applying; none blocks the client)
 - **F15 (proposed number), bridge visibility:** `GET /v1/repos/{key}/board` returns every agent's `repo_root` and `cwd` (host paths) to every member, while `/v1/repos` hides `repo_root` from non-admins. Recommended default: redact those two fields for non-admins in the bridge (a visibility-policy change, so a test that fails without it), as a small follow-up bridge task; the client already drops them and renders none. Say if you would rather leave the bridge as is.
@@ -41,7 +40,7 @@ Leftover finished worktrees (T0 and T1) stay until the milestone ends; their com
 - Vite 8's Lightning CSS adds `--lightningcss-*` custom properties and shortens `#000000` to `#000`; an E2E that reads a token value must normalise.
 
 ## Open warnings
-- Codex: ping and one real review work under `--sandbox read-only`; round 1 found 3 Medium plus 1 Low, all reproduced. Round 2 is the next use. Fallback is a fresh Opus subagent and Flan is told.
+- Codex: G0 took three read-only rounds on the static server (3 Medium and 1 Low, then 1 Medium and 1 Low, then none); every finding was reproduced before patching. Its weekly window was 4.0% used at the first ping on 2026-10-09 and has not been re-measured; check it before G2, the next use. Fallback is a fresh Opus subagent and Flan is told.
 - Accepted for now, revisit on 2026-10-14: `source-map-js` 1.2.1 has a high advisory (GHSA-68fv-2mgg-jv7q; build and test time only; not in `dist`). The fix 1.2.2 was published 2026-09-30; once it is 14 days old add an `overrides` pin, regenerate the lockfile and rerun `docs/dependencies.md`.
 - Brand-new majors pinned (TypeScript 7.0.2, Vite 8.3.1, Vitest 5.0.1, jsdom 29.1.1): all work today; older lines are untried fallbacks if a task hits a toolchain bug.
 - The hand-back call can be refused ("only the auto-mode classifier can allow SubagentHandback"). Executors also write `.executor-report.md` in their worktree (git-excluded); if a report does not arrive, parse the transcript under `/tmp/claude-1000/.../tasks/`.
@@ -55,4 +54,6 @@ Leftover finished worktrees (T0 and T1) stay until the milestone ends; their com
 4. A test-hygiene smell in `static.test.js`: when `createBridge` throws in a setup, the runner hangs (seen only under mutation S2). Not fixed.
 
 ## Next
-As each of T1b, T2 and T4 lands: accept it (checkpoint verification, convention gate), commit and cherry-pick. When T1b lands, dispatch T3 into the freed slot and run Codex round 2. G1 (types against live responses, UI contract frozen) closes Wave 1; then Wave 2 (T5, T8, T7).
+1. As T8a, T8b and T7 land: accept each (checkpoint verification and the convention gate; I read the feed code, the combobox code and the token dialog line by line), commit in its worktree, cherry-pick onto `m3-client`, rerun the combined checks (typecheck, client tests with `CHATTER_JS`, build, `check:dist`, the bridge suite). Into each freed slot dispatch T6 (board and members) then T9 (notifications); briefs are in the plan and the dispatch template is there too (BASE is the current `m3-client` HEAD; fast-forward each new worktree).
+2. When T5 to T9 are all merged, T10 (me, plus an Opus fixer if needed): wire `main.tsx` (`createStore`, `StoreProvider`, the shell's props from the snapshot, the registry with the real views, T9's `notifications`), apply the items carried from T3 and T5 above, run the E2E suite (24 tests, needs `CHATTER_JS`) and fix spec and UI mismatches (the `data-theme` assertion first), then run my three mutation checks against the integrated UI: break `canSee` (the DM spec must go red), drop the `@everyone` rule (the refusal spec must go red), drop the CSP (the CSP guard must go red).
+3. G2: Codex read-only adversarial review of the whole M3 diff (diff template; check its quota first), converge to zero surviving findings, update the State section of `CLAUDE.md`, then report to Flan. The cadence is "run to the M3 gate": stop when the gate passes or something blocks. Nothing is pushed without Flan's go-ahead.
