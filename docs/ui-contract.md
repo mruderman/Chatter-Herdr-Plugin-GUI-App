@@ -2,13 +2,13 @@
 
 Shared by the shell (T3), the feature views (T5 to T9), the blind E2E specs (T4) and integration (T10). Roles and accessible names below are what tests select on, so they are part of the contract, not styling. Frozen at gate G1; only the coordinator amends it. Source of behaviour: `docs/SPEC.md` §5 to §7.
 
-## 1. Sign-in (only when `GET /v1/me` returns 401)
+## 1. Sign-in (when `GET /v1/me` returns 401, or 403 with code `not_registered`)
 | Element | Role / label | Behaviour |
 |---|---|---|
 | Heading | h1 "Sign in" | |
 | Token field | label "Access token" (`input type=password`, `autocomplete=off`) | the token lives in memory only; the field is cleared and removed after success |
 | Button | button "Sign in" | Enter in the field submits |
-| Failure | `alert` | text is the bridge's `error.message`, prefixed "Sign-in failed: " |
+| Failure | `alert` | text is the bridge's `error.message`, prefixed "Sign-in failed: ". Shown after a failed attempt, and also on first load for a 403 `not_registered` ("Sign-in failed: your Tailscale login is not registered as a member", with the token form still available); not shown on first load for a plain 401, when nothing has been tried yet. |
 
 ## 2. Structure
 - First two tab stops, visible on focus: link "Skip to messages", link "Skip to message box".
@@ -19,7 +19,7 @@ Shared by the shell (T3), the feature views (T5 to T9), the blind E2E specs (T4)
 ## 3. Chat view
 | Element | Role / label | Behaviour |
 |---|---|---|
-| Conversations | buttons in `navigation` "Conversations": "#chat"; "DM with {handle}"; for an admin looking at a DM not involving them, "DM {a} to {b}" | current has `aria-current="true"`. A DM conversation appears when a message arrives or the member sends one. |
+| Conversations | buttons in `navigation` "Conversations": "#chat"; "DM with {handle}"; for an admin looking at a DM not involving them, "DM {a} to {b}" with the two handles in alphabetical order (one button for both directions; no direction is implied) | current has `aria-current="true"`. A DM conversation appears when a message arrives or the member sends one. |
 | Feed | `log` named "Messages", `aria-live="off"`, focusable (`tabindex=0`) | oldest first; plain text nodes only |
 | Day separator | h3 with the local date | one per local day |
 | New marker | `separator` named "New messages" with the same visible text | once, before the first message past the read pointer, only if unread messages existed when the conversation opened |
@@ -28,7 +28,7 @@ Shared by the shell (T3), the feature views (T5 to T9), the blind E2E specs (T4)
 | Composer | `form` named "Message composer" with: textarea labelled "Message", select labelled "To" (`#chat`, then each active member, then each agent as "{name} (agent)"), button "Send" | Enter sends, Shift+Enter inserts a newline; text is cleared only after a successful send |
 | Suggestions | `listbox` named "Mention suggestions"; `option` text "{handle} (Human)", "(Computational)" or "(Agent)" | opens on `@`; ArrowUp/ArrowDown move through options (`aria-activedescendant`); Enter or Tab accepts; Escape closes without losing text. `everyone` is offered to admins only; agents only when `can_address_agents`. The textarea has role `combobox` with `aria-expanded` and `aria-controls` while suggestions are shown. |
 | Send error | `alert` named "Send error" | text "Not sent: " plus the bridge's `error.message`; the draft stays in the textarea; nothing appears in the feed |
-| Announcements | `status` named "Announcements" (visually hidden) | polite; updated at most once per 3 seconds; one message reads "{sender}: {first 140 characters}", a burst reads "{n} new messages in {conversation}"; never announces the member's own messages |
+| Announcements | `status` named "Announcements" (visually hidden) | polite; updated at most once per 3 seconds; one message reads "{sender}: {first 140 characters}", a burst in one conversation reads "{n} new messages in {conversation}", and a burst across several reads "{n} new messages in {k} conversations"; never announces the member's own messages |
 
 ## 4. Board, Members, Admin, Settings
 | View | Contract |
