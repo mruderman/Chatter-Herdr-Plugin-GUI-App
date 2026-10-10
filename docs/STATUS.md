@@ -1,7 +1,7 @@
-**Updated:** 2026-10-10 · `m3-client` with T0 to T5 and T8b merged; `npm test` 83 pass; client typecheck clean, 651 unit tests pass (with real Chatter), build and check:dist green · running: T8a, T7, T6; queued: T9
+**Updated:** 2026-10-10 · `m3-client` with T0 to T5, T8a and T8b merged; `npm test` 83 pass; client typecheck clean, 762 unit tests pass (with real Chatter), build and check:dist green · running: T7, T6, T9 · T10 next
 
 ## Where we are
-- Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5, T8b (see `git log`); G0 and G1 closed. Wave 2 running: T8a (conversations and feed), T7 (admin panel), T6 (board and members). Queued for the next free slot: T9 (notifications); T10 (integration and the gate) after them.
+- Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5, T8a, T8b (see `git log`); G0 and G1 closed. Wave 2 running: T7 (admin panel), T6 (board and members), T9 (notifications). Then T10 (integration and the gate) and G2.
 - Branch: `m3-client` (from `main` at `2e09e44`), not pushed. Nothing is pushed without Flan's go-ahead.
 - Agreed 2026-10-09: go; `/brief` and `/role` deferred (Q2); Claude subagents code, Codex reviews read-only; run to the M3 gate; up to 3 executors at once.
 
@@ -12,7 +12,7 @@ All run in the background; each completion notice returns to this session. Workt
 |---|---|---|---|
 | T7 admin panel (members and audit; the token dialog is the most sensitive code; brief in the plan) | Sonnet, running (BASE `68e5d0f`) | `client/src/features/admin/**` | tests (unit and real-bridge integration), build, check:dist, the agent's browser results; I read the token dialog line by line; mutation spot-checks; commit; cherry-pick |
 | T6 board and members views (brief in the plan) | Sonnet, running (BASE `fa8dbf7`) | `client/src/features/board/**`, `client/src/features/members/**` | tests, build, check:dist, the agent's axe results; no host paths rendered; mutation spot-checks; commit; cherry-pick |
-| T8a conversations and feed, announcements, `ChatView` (brief in the plan) | Opus, running (BASE `086ba15`) | `client/src/features/chat/{conversations,feed,announcements}/**`, `ChatView.tsx`, `index.ts` | tests, build, check:dist, the agent's real-browser axe and scroll results; I read the feed code; mutation spot-checks; commit; cherry-pick |
+| T9 desktop notifications (brief in the plan; D17: no message text, permission on a button press) | Sonnet, running (BASE `2442946`) | `client/src/features/notify/**` | tests, build, check:dist, the agent's results; I read what each notification contains; mutation spot-checks; commit; cherry-pick |
 
 Finished worktrees (T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5) stay until the milestone ends; their commits are already cherry-picked. Clean them up at the end with `git worktree list`, `git worktree unlock`, `git worktree remove` and deleting the `worktree-agent-*` branches.
 
@@ -24,6 +24,12 @@ Finished worktrees (T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5) stay until the m
 - Only the "drop the CSP" mutation can turn a spec red today. "Break `canSee`" and "drop the `@everyone` rule" cannot show anything until the real UI exists, because those specs fail at sign-in now. Do not read "still red" as "caught" at G1; run the three mutations at T10 against the integrated UI and require each to flip its named spec.
 - T4's specs use tolerant selectors where the contract was ambiguous; the rulings are now in `docs/ui-contract.md` section 8, so T10 may tighten them. E2E does not cover announcements, the "New messages" marker, day separators, "Load older messages", Board and Members contents, or 200% text; unit tests with the fake store carry those. Add E2E for any of them if time allows (day separators need rows with older timestamps, which only a direct write to the scratch Chatter database can seed; `seedAgent` in the test helpers already sets that precedent).
 - T4's specs read Chatter's table directly (`countChatterRows`); the harness world is: admin `flan`, humans `hana` and `ivo`, computational `kai`, agent `codex`, repos "main" and "sidecar".
+
+## Carried from T8a to T10
+- Ruling given: T8a's two extra `markRead` triggers (the reader scrolling to the bottom; the page becoming visible again) are accepted, inside the brief's intent; a repeat for the same newest id is skipped.
+- The "Mentions you" label is applied literally, so it also marks the member's own message that uses `@everyone`; it should apply only to messages from others. Add `message.from !== me` in `feed-items.ts` (`labelsFor`) and a test.
+- The Chat registry entry must be a stable component: a new inline component per snapshot remounts the feed and re-places the reader on every update. `index.ts` does not export the composer; T10 passes `<Composer snapshot store />` as `ChatView`'s `composer` prop.
+- Grouping is a chain (a message joins the group if it is at most 300 s after the same sender's previous message); a day heading or the marker starts a new header; times are `HH:MM` 24-hour with Latin digits, day headings use English unless a locale is passed; the feed counts as at the bottom within 4 px. The hidden-page path was not exercised in a real browser (headless pages stay visible); unit tests cover it.
 
 ## Carried from T8b to T10
 - The composer offers agent mentions only when `me.can_address_agents`, following my brief; the bridge's policy lets an admin address agents whatever the flag says. Change `mentionCandidates` to offer agents when `me.role === 'admin' || me.can_address_agents` (and the contract line in section 3) and add a test. No effect on the default admin, whose flag is true.
