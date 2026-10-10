@@ -1,7 +1,7 @@
-**Updated:** 2026-10-10 · `m3-client` with T0, T1, T1b, T1c, T1d, T2, T2b, T3 and T4 merged; `npm test` 83 pass / 0 fail / 0 skipped; client typecheck clean, 435 unit tests pass, build and check:dist green · G0 and G1 closed · running: T5, T8b, T8a
+**Updated:** 2026-10-10 · `m3-client` at `68e5d0f` (T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4 and T5 merged; docs) · `npm test` 83 pass; client typecheck clean, 579 unit tests pass (with real Chatter), build and check:dist green · running: T8a, T8b, T7; queued: T6, T9
 
 ## Where we are
-- Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4 (see `git log`); G0 and G1 closed. Wave 2 running: T5 (real store), T8b (composer), T8a (conversations and feed). Queued for free slots: T7 (admin), T6 (board and members), T9 (notifications); T10 (integration and the gate) after them.
+- Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T1d, T2, T2b, T3, T4, T5 (see `git log`); G0 and G1 closed. Wave 2 running: T8a (conversations and feed), T8b (composer), T7 (admin panel). Queued for free slots: T6 (board and members), T9 (notifications); T10 (integration and the gate) after them.
 - Branch: `m3-client` (from `main` at `2e09e44`), not pushed. Nothing is pushed without Flan's go-ahead.
 - Agreed 2026-10-09: go; `/brief` and `/role` deferred (Q2); Claude subagents code, Codex reviews read-only; run to the M3 gate; up to 3 executors at once.
 - Wave 1 started before G0 fully closed, on purpose: T1b only hardened edge cases of the static server (symlink escapes, response framing), not the surface Wave 1 consumes (CSP, headers, SPA fallback). G1 cannot close before G0 does.
@@ -11,7 +11,7 @@ All run in the background; each completion notice returns to this session. Workt
 
 | Task | Executor | Holds | When it lands |
 |---|---|---|---|
-| T5 session and sync, the real store (brief in the plan; the fake store is the behavioural reference; streams for every non-orphan repo up to 8) | Opus, running (BASE `2ef5be0`) | new files under `client/src/state/` (not `types.ts`, `fake.ts`, `fake.test.ts`) | typecheck, unit and real-bridge integration tests green; read `store.ts` and the conformance suite myself; my own mutation spot-checks; commit; cherry-pick |
+| T7 admin panel (members and audit; the token dialog is the most sensitive code; brief in the plan) | Sonnet, running (BASE `68e5d0f`) | `client/src/features/admin/**` | tests (unit and real-bridge integration), build, check:dist, the agent's browser results; I read the token dialog line by line; mutation spot-checks; commit; cherry-pick |
 | T8b composer and mention suggestions (brief in the plan; follows the UI contract section 8) | Opus, running (BASE `aafb18a`) | `client/src/features/chat/composer/**` | tests, build, check:dist, the agent's real-browser axe results; I read the combobox code; mutation spot-checks; commit; cherry-pick |
 | T8a conversations and feed, announcements, `ChatView` (brief in the plan) | Opus, running (BASE `086ba15`) | `client/src/features/chat/{conversations,feed,announcements}/**`, `ChatView.tsx`, `index.ts` | tests, build, check:dist, the agent's real-browser axe and scroll results; I read the feed code; mutation spot-checks; commit; cherry-pick |
 
@@ -25,6 +25,13 @@ Leftover finished worktrees (T0 and T1) stay until the milestone ends; their com
 - Only the "drop the CSP" mutation can turn a spec red today. "Break `canSee`" and "drop the `@everyone` rule" cannot show anything until the real UI exists, because those specs fail at sign-in now. Do not read "still red" as "caught" at G1; run the three mutations at T10 against the integrated UI and require each to flip its named spec.
 - T4's specs use tolerant selectors where the contract was ambiguous; the rulings are now in `docs/ui-contract.md` section 8, so T10 may tighten them. E2E does not cover announcements, the "New messages" marker, day separators, "Load older messages", Board and Members contents, or 200% text; unit tests with the fake store carry those. Add E2E for any of them if time allows (day separators need rows with older timestamps, which only a direct write to the scratch Chatter database can seed; `seedAgent` in the test helpers already sets that precedent).
 - T4's specs read Chatter's table directly (`countChatterRows`); the harness world is: admin `flan`, humans `hana` and `ivo`, computational `kai`, agent `codex`, repos "main" and "sidecar".
+
+## Carried from T5 to T10
+- The real store: `createStore()` with no argument builds the API on the page's own origin around an in-memory token; `StoreProvider`, `useStore` and `useSnapshot` are in `client/src/state/provider.tsx`; the app-level wiring (`main.tsx`, the shell's props from the snapshot, the registry) is T10's.
+- Accepted residual: removing the `run === this.run` guard on stream messages in `repo-sync.ts` is not caught by any test; it is belt-and-braces behind `connectStream`'s own `close()`, which stops callbacks. Not worth reopening T5.
+- The real store differs from the fake only in the ways its report lists (asynchronous start, `sendError` cleared when a send starts, a 1,000-message cache cap, `refreshDirectory` publishing only on a real change); a conformance suite shows no difference in labels, order, ids, the marker, send errors, announcements or the directory. T2's `stream.ts` doc comment says a stream starts after `max_id`; the store starts after the highest loaded id, which is the safe choice (the page reads `max_id` in a separate statement). A comment-only fix for later.
+- A selected recipient with no conversation yet is held by the composer (UI contract section 8, T8b); `selectConversation` ignores unknown ids in both stores.
+- Revoked members keep a readable cache: `connection` is `revoked`, nothing more is requested. A stream that closes `unauthorized` ends the session with the bridge's own error.
 
 ## Carried from T3 to T10 (integration)
 - T3's shell takes `ShellSession`, `RepoOption` and `ShellMember` props; T10 maps the store onto them, passes T9's `notifications` prop, and supplies the real views through the registry (T3's `features/index.ts`).
