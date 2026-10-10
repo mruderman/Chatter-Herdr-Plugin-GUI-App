@@ -82,6 +82,12 @@ Serve a built SPA from `CHATTER_BRIDGE_STATIC_DIR` at `/`, zero dependencies, no
 - **T6, T9** read-only board, member list with kind badges; notifications for mentions of the member and DMs to the member only.
 - **T10** wire everything through the registry, run the gate scenarios, then my mutation checks.
 
+## Dispatch and acceptance notes
+- The harness builds executor worktrees from `main`, not from `m3-client`. Every prompt therefore begins with Step 0: confirm `git log -1 --format=%H` equals the BASE, else `git merge --ff-only m3-client`.
+- Executors do not commit. After acceptance I commit in the worktree with the harness trailer, then merge into `m3-client` (`--ff-only` if the branch has not moved, else cherry-pick the one commit).
+- Acceptance per task: `checkpoint-verification` (call-sites and the real runtime path), then `convention-commit-gate` (constants rather than literals, no suppressions, existing patterns). An executor's report is a hint, not evidence.
+- G0 and G2 follow `adversarial-review-to-go` with the diff template. Codex runs read-only, so it proposes seeded mutations by reading and I execute them.
+
 ## Test strategy
 - **Bridge** (`node:test`, real Chatter): static and CSP, tests first; the existing 30 untouched.
 - **Client unit** (Vitest): SSE parsing, backoff, resume and bye handling; merge, dedupe, gaps; grouping and day separators; new marker; mention parsing; notification gating; plain-text rendering.

@@ -44,6 +44,7 @@ Use absolute paths; the shell's cwd may not be where you think. Your worktree ha
 - Not sure about an API of Preact, Vite, Vitest, Playwright or axe? Fetch current docs: `npx ctx7@latest library <name> "<question>"`, then `npx ctx7@latest docs <id> "<question>"` (three commands at most per question). Do not rely on memory.
 
 ## 6. How to work
+- Step 0, confirm your base: `git log -1 --format=%H` must equal the BASE in your prompt. The harness creates worktrees from `main`, not from the coordinator's branch; if you are behind, run `git merge --ff-only m3-client` (the branch is visible from your worktree) and check again. If it still differs, stop and report.
 - One task. Do exactly it, then stop.
 - Policy or security behaviour gets a test that fails without the change: write it first and watch it fail.
 - Follow the plan's done-when literally. If the plan or a frozen contract is wrong or ambiguous, stop and report; do not improvise. Never edit outside your held paths to make a check pass.

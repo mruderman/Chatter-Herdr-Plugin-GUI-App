@@ -15,8 +15,9 @@ Source of labor approved by Flan on 2026-10-09: Claude subagents write the code;
 ## Observed capability
 | Agent | Does well | Failed at | Last used |
 |-------|-----------|-----------|-----------|
-| (none recorded yet) | | | |
+| Codex CLI 0.162.1 | ping with `--sandbox read-only` answered "ok", exit 0; weekly window 4.0% used (2026-10-09 20:02 local) | prints an unrelated MCP transport error for `127.0.0.1:9010` on stderr; harmless | 2026-10-09, ping only |
+| Claude subagent, `isolation: worktree` | launches in the background and notifies this session | worktrees are built from `main`, not from the coordinator's branch, so docs committed on `m3-client` were missing until fast-forwarded | 2026-10-09, Wave 0 |
 
 ## Undecided
-- Codex quota and how its sandbox treats loopback: unverified. Ping before first use; reviewing needs neither network nor writes.
+- Whether Codex's read-only sandbox lets it run `git diff` and read a worktree outside its `--cd`: unverified until G0.
 - `agy` and `kiro-cli` are absent on this machine (the plugin's roster file describes another one); not used.
