@@ -11,7 +11,7 @@ export const CHATTER_JS = process.env.CHATTER_JS || '/home/claude/chatter/dist/b
 export const haveChatter = fs.existsSync(CHATTER_JS);
 
 /** A scratch Chatter universe plus a running bridge, all in a temp dir. */
-export async function makeEnv({ trustTailscale = false, whois, limits, pollMs = 50 } = {}) {
+export async function makeEnv({ trustTailscale = false, whois, limits, pollMs = 50, staticDir } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-test-'));
   const state = path.join(root, 'chatter-state');
   const adminCfg = path.join(root, 'admin-cfg');
@@ -30,7 +30,7 @@ export async function makeEnv({ trustTailscale = false, whois, limits, pollMs = 
   });
   const store = new Store(path.join(root, 'bridge.db'));
   store.addMember({ handle: 'flan', kind: 'human', role: 'admin', tailscale_login: 'flan@example.com' });
-  const app = createBridge({ store, host, trustTailscale, whois, limits, pollMs });
+  const app = createBridge({ store, host, trustTailscale, whois, limits, pollMs, staticDir });
   const addr = await app.listen(0);
   const base = `http://127.0.0.1:${addr.port}`;
 

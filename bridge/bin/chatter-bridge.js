@@ -24,6 +24,7 @@ Environment:
   CHATTER_STATE_DIR          HERDR_PLUGIN_STATE_DIR passthrough for Chatter
   CHATTER_BRIDGE_TRUST_TAILSCALE=1   trust Tailscale identity headers (verified with tailscale whois)
   CHATTER_BRIDGE_ORIGINS     comma-separated CORS origins (default none)
+  CHATTER_BRIDGE_STATIC_DIR  serve the built web client from this directory at / (default: not served)
 `;
 
 function parseArgs(argv) {
@@ -84,6 +85,7 @@ async function main() {
       store, host,
       trustTailscale: process.env.CHATTER_BRIDGE_TRUST_TAILSCALE === '1',
       origins: (process.env.CHATTER_BRIDGE_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
+      staticDir: process.env.CHATTER_BRIDGE_STATIC_DIR || null,
       log: (l) => console.log(`${new Date().toISOString()} ${l}`),
     });
     const addr = await app.listen(port, hostName);

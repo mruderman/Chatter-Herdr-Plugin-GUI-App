@@ -42,6 +42,22 @@ tailscale serve status
 
 The bridge refuses to listen on anything but loopback. Check that port 8791 is free first (`ss -ltn`).
 
+## Configuration
+
+`chatter-bridge` reads these environment variables; the systemd unit in `deploy/` sets some of them.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `CHATTER_BRIDGE_STATE_DIR` | `~/.local/state/chatter-bridge` | Bridge data: members, token hashes, audit log and read pointers. |
+| `CHATTER_CMD` | `chatter` | How to run Chatter: a command, or a JSON array. |
+| `CHATTER_ADMIN_CONFIG_DIR` | Chatter's own | Chatter config directory of the human admin. |
+| `CHATTER_STATE_DIR` | unset | Passed to Chatter as `HERDR_PLUGIN_STATE_DIR`. |
+| `CHATTER_BRIDGE_HOST` | `127.0.0.1` | Address `serve` binds; `--host` wins. Loopback only unless `--allow-non-loopback` is passed. |
+| `CHATTER_BRIDGE_PORT` | `8791` | Port `serve` binds; `--port` wins. |
+| `CHATTER_BRIDGE_TRUST_TAILSCALE` | unset | `1` trusts Tailscale identity headers, each verified with `tailscale whois`. |
+| `CHATTER_BRIDGE_ORIGINS` | none | Comma-separated origins allowed to call the API cross-origin. |
+| `CHATTER_BRIDGE_STATIC_DIR` | unset: no web client | Serves the built web client (`client/dist`) at `/`. It must contain `index.html`, or `serve` refuses to start. `/healthz` and everything under `/v1` are unchanged. |
+
 ## Members and permissions
 
 - Handles are lowercase letters, digits, `_` and `-`. A handle may not match any Herdr agent name.

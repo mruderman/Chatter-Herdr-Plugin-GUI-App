@@ -2,6 +2,7 @@ import http from 'node:http';
 import { makeAuthenticator } from './auth.js';
 import { canSee, boardTables, findWritten, maxMessageId, queryMessages, rowsAfter, shape } from './messages.js';
 import { DEFAULT_LIMITS, RateLimiter, checkWrite } from './policy.js';
+import { apiArea, createStatic } from './static.js';
 import { HttpError } from './util.js';
 
 export const VERSION = '0.1.0';
@@ -97,7 +98,8 @@ class Watcher {
  * @param {import('./store.js').Store} o.store
  * @param {import('./chatter.js').ChatterHost} o.host
  */
-export function createBridge({ store, host, trustTailscale = false, whois, limits = DEFAULT_LIMITS, origins = [], pollMs = 500, log = () => {} }) {
+export function createBridge({ store, host, trustTailscale = false, whois, limits = DEFAULT_LIMITS, origins = [], pollMs = 500, staticDir = null, log = () => {} }) {
+  const statics = staticDir ? createStatic(staticDir) : null;
   const identify = makeAuthenticator({ store, trustTailscale, whois });
   const limiter = new RateLimiter(limits.postsPerMinute);
   const bridge = { store, host, log, pollMs, watchers: new Map() };
@@ -268,12 +270,18 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
   }
 
   async function route(req, res, url) {
+    const area = apiArea(url.pathname);
+    // The app shell is served without credentials (D15); every path the API claims stays with the API.
+    // This runs before `seg`, whose decoding throws, so a bad encoding outside the API is a 400, not a 500.
+    if (statics && area === null && (req.method === 'GET' || req.method === 'HEAD')) {
+      return statics.serve(req, res, url.pathname);
+    }
     const seg = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
     const method = req.method;
     if (method === 'GET' && url.pathname === '/healthz') {
       return send(res, 200, { ok: true, version: VERSION, repos: (await host.repos()).length });
     }
-    if (seg[0] !== 'v1') throw new HttpError(404, 'not_found', 'no such route');
+    if (area !== 'v1') throw new HttpError(404, 'not_found', 'no such route');
     const member = await identify(req);
     const admin = () => { if (member.role !== 'admin') throw new HttpError(403, 'admin_only', 'admin only'); };
 
