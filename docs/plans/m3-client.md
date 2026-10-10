@@ -72,6 +72,12 @@ Serve a built SPA from `CHATTER_BRIDGE_STATIC_DIR` at `/`, zero dependencies, no
 - Tests (`bridge/test/static.test.js`, `node:test`): every rule above, plus encoded and double-encoded traversal, symlink to a file and to a directory outside the root, dotfiles, directory request, `HEAD`, content types, cache headers, and that `/v1/*` and `/healthz` behave as before. `makeEnv` in `helpers.js` gains a `staticDir` option, used by the integration cases and later by T4.
 - Done when, with pasted output: the new tests were seen failing first; `npm test` shows the old 30 still pass plus the new ones, none skipped, with `CHATTER_JS` set. You performed each mutation and report which test went red: remove the CSP header, remove the traversal guard, remove the `realpath` check, remove the `/v1` exclusion from the fallback. `git status` shows only held paths.
 
+Notes from the first T1 run (blocked on its first Write, so design only; recovered from its transcript, accepted by the coordinator pending G0):
+- `route()` in `bridge/src/server.js` decodes every path segment before routing (line 271). A static hook placed at the existing "not v1" branch would turn bad percent-encoding into a 500. Put the GET/HEAD static hook at the top of `route()`, guarded by an `isApiPath` check, and make `route()` and the guard share one function rather than two copies of the rule "the first decoded segment is `v1` or `healthz`".
+- Decisions: static errors use the bridge's JSON error shape with `Cache-Control: no-store` and all security headers; an empty `CHATTER_BRIDGE_STATIC_DIR` counts as unset; `Accept: */*` does not trigger the SPA fallback; a raw or encoded backslash in the path is a 400 (the query string is not checked); a path whose decoded first segment is `v1` or `healthz` is a 404 even if a file exists there (this catches `/v1%2fme`); a symlink escape is a 404 with no fallback; MIME types: js and mjs `text/javascript; charset=utf-8`, ico `image/x-icon`, webmanifest `application/manifest+json`.
+- `README.md` has no configuration table; the environment variables appear only in the CLI help. Add a small table for all of them, including the new one.
+- About 22 tests were drafted in that run: raw `http.request` so the client does not normalise paths, a sentinel file outside the static root, exact status codes.
+
 ## Wave 1 briefs (drafted during Wave 0; adjust at G0 if Wave 0 teaches something)
 
 ### T2 API module and state contract

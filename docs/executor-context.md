@@ -61,3 +61,5 @@ Other executors work at the same time in other worktrees on disjoint paths. Run 
 - Anything suspicious, anything you could not verify and why, anything you could not decide alone.
 
 A clean report that hides a doubt is worse than a short one that shows it.
+
+Also write the same report to `.executor-report.md` at your worktree root (it is excluded from git). The hand-back call can be refused when the session is not in auto mode; the file is how the coordinator still reads your report.
