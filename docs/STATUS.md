@@ -9,10 +9,15 @@
 ## In flight
 | Task | State | Executor | Where | When it lands |
 |---|---|---|---|---|
-| T0 scaffold and deps | Running: resumed 2026-10-10, completion notice returns to this session. BASE `4aeda94`. Carries the scope addition (testing-library dom and user-event, axe-core, `test/render.ts`) | Sonnet subagent, resumed | the worktree under `.claude/worktrees/` for `client/**` | verify from a clean `client/node_modules` (`npm ci`, typecheck, test, build, check:dist, `playwright test --list`, headless launch); re-check `docs/dependencies.md` with `npm view`; commit in the worktree; cherry-pick onto `m3-client` |
-| G0 review of T1 | Running since 06:08 local: Codex CLI, `--sandbox read-only`, on `m3-client` at `616ccb9`; its session file exists and is active; the exit notice returns to this session | Codex | prompt `scratchpad/codex-g0/prompt.md`, answer `scratchpad/codex-g0/review.md` | re-verify every finding on the source; patch valid ones minimally; run any mutations it proposes; round 2 only if findings survive |
+| T0 scaffold and deps | Finished and cherry-picked at `d7ceb1f`; acceptance still open: clean `npm ci` plus every check from `m3-client`, and the real-browser CSP load | Sonnet subagent, finished | worktree under `.claude/worktrees/` (now only a leftover) | finish my checks; if one fails, fix forward or revert before Wave 1 |
+| T1b static follow-ups | dispatching now (see below for the run) | Opus subagent | worktree under `.claude/worktrees/`, holds `bridge/src/static.js` and `bridge/test/static.test.js` | verify (tests, reproductions rerun, mutations), commit, cherry-pick, then Codex round 2 on the patched sites |
 
 Done: T1 at `616ccb9`. Evidence: I reran the 54 tests; read `static.js` in full; drove the real CLI and curl (21 probes: nothing outside the root served, CSP byte-exact on every static response, API and `/healthz` untouched, bad dirs refused at startup); reran the four required mutations plus two extras on a scratch copy (15, 1, 1, 1, 1, 1 failing tests).
+
+## G0 progress (2026-10-10)
+- T0 committed and cherry-picked at `d7ceb1f`. My checks so far: footprint inside held paths; all 209 lockfile name@version pairs published before 2026-09-25 (newest `electron-to-chromium@1.5.439`, 2026-09-24); 12 of 12 direct deps exact pins; registry sources and integrity everywhere; `fsevents` (darwin-only) the only install script; engines floor corrected to Node 22.13. Still to do: clean `npm ci` and every check from `m3-client`, and a real browser load of the built page through the bridge's CSP.
+- Codex round 1 on `616ccb9`: 3 Medium plus 1 Low coverage finding; I reproduced all of them on the real CLI. Decisions are in the plan (T1b): patch the escape-symlink fallback, the Content-Length framing and the descriptor-closure test gap; do not patch the dot-segment normalisation point. Of Codex's 17 proposed mutations 16 are caught; `sendFile` not closing its handle is the unguarded one.
+- Accepted for now, revisit: `source-map-js` 1.2.1 has a high advisory (GHSA-68fv-2mgg-jv7q, build and test time only, not in `dist`); the fix 1.2.2 was published 2026-09-30 and becomes eligible under the two-week rule on 2026-10-14, then add an `overrides` pin and rerun `docs/dependencies.md`.
 
 ## Open warnings
 - Codex: ping and one real review launch work under `--sandbox read-only` (weekly window was 4.0% used). Finding quality not yet seen. Fallback is a fresh Opus subagent and Flan is told.
