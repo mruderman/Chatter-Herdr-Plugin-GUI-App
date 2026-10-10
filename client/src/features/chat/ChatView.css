@@ -1,0 +1,28 @@
+/*
+ * The chat view: conversations beside the feed when there is room, above it when there is not. Every
+ * column may shrink to zero (`minmax(0, 1fr)`), so a long label or word cannot push the page wider
+ * than a 320 px screen.
+ */
+
+.chat__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (min-width: 48rem) {
+  .chat__layout {
+    grid-template-columns: minmax(10rem, 16rem) minmax(0, 1fr);
+  }
+}
+
+.chat__conversation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.chat__conversation-title {
+  margin: 0;
+}

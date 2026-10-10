@@ -1,0 +1,113 @@
+/*
+ * The feed. Colours come from the design tokens only, and no state is told by colour alone: the marker
+ * and the labels are words, and a mention adds a bar beside the message as well as its label.
+ */
+
+.feed {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.feed__older {
+  justify-self: start;
+}
+
+/*
+ * The log scrolls by itself so the composer stays in reach below it. Its height follows the small
+ * viewport height, which does not change while a phone's browser bars or keyboard come and go, so a
+ * reader kept at the newest message stays there. Scroll anchoring is off because the feed restores the
+ * reading position itself when older messages load; the browser's own adjustment would add to it.
+ */
+.feed__log {
+  block-size: clamp(12rem, 60vh, 48rem);
+  block-size: clamp(12rem, 60svh, 48rem);
+  overflow-y: auto;
+  overflow-anchor: none;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.feed__status {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.feed__day {
+  margin: var(--space-4) 0 var(--space-2);
+  padding-block-end: var(--space-1);
+  border-block-end: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.feed__day:first-child {
+  margin-block-start: 0;
+}
+
+/* "New messages": the words carry it; the rules on either side repeat it at a glance. */
+.feed__marker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block: var(--space-3);
+  color: var(--tone-danger-text);
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+}
+
+.feed__marker::before,
+.feed__marker::after {
+  content: '';
+  flex: 1 1 0;
+  border-block-start: 2px solid var(--tone-danger-border);
+}
+
+/* The inline-start padding leaves room for the mention bar, so text lines up with or without it. */
+.message {
+  padding-block: var(--space-1);
+  padding-inline: calc(var(--space-2) + 4px) var(--space-2);
+}
+
+.message--starts-group {
+  margin-block-start: var(--space-3);
+}
+
+.message__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+}
+
+.message__sender {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.message__time {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* Plain text as written: line breaks and indentation kept; long words and URLs wrap instead of widening the page. */
+.message__body {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-block-start: var(--space-1);
+}
+
+/* SPEC section 7: a mention is highlighted and labelled. The bar is a shape; forced colours keep it. */
+.message--mentions-you {
+  padding-inline-start: var(--space-2);
+  border-inline-start: 4px solid var(--tone-warning-border);
+}

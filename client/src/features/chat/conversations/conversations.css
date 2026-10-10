@@ -1,0 +1,70 @@
+/*
+ * Conversation buttons, styled like the primary navigation: the current one gets a bar, bold text and
+ * the selected tint, so it never differs from the others by colour alone.
+ */
+
+.conversations__heading {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-base);
+}
+
+.conversations__none {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+/* A row that wraps on narrow screens; a column beside the feed once there is room. */
+.conversations__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * Labels can be long ("DM a-long-handle to another-one"), so they wrap rather than widen the page.
+ * Regular weight here, so the current one's bold is a plain difference and not 600 against 700.
+ */
+.conversations__button {
+  justify-content: flex-start;
+  max-inline-size: 100%;
+  border-color: transparent;
+  border-inline-start: 4px solid transparent;
+  background: transparent;
+  font-weight: 400;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.conversations__button[aria-current='true'] {
+  border-inline-start-color: var(--color-accent);
+  background: var(--color-selected-bg);
+  color: var(--color-selected-text);
+  font-weight: 700;
+}
+
+.conversations__button[aria-current='true']:hover {
+  background: var(--color-selected-bg);
+}
+
+@media (min-width: 48rem) {
+  .conversations__list {
+    flex-direction: column;
+    flex-wrap: nowrap;
+  }
+
+  .conversations__button {
+    inline-size: 100%;
+  }
+}
+
+/* Forced colours flatten the tint and recolour the bar, so the current one is underlined as well. */
+@media (forced-colors: active) {
+  .conversations__button[aria-current='true'] {
+    text-decoration: underline;
+    text-decoration-thickness: 0.15em;
+    text-underline-offset: 0.25em;
+  }
+}
