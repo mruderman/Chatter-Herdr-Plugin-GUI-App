@@ -1,0 +1,113 @@
+/*
+ * Page structure. Nothing here is fixed or sticky: a pinned header would hide focused controls as the
+ * page scrolls (WCAG 2.2 "Focus Not Obscured"). The layout reflows from 320 CSS px up, wraps instead of
+ * clipping, and uses min-block-size rather than heights so 200% text still fits.
+ */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 100vh;
+  min-block-size: 100dvh;
+}
+
+/*
+ * The shell moves focus here once after a sign-in, so that the next Tab reaches the first skip link.
+ * It is a position marker, never a control, so it gets no ring around the whole page.
+ */
+.app:focus,
+.app:focus-visible {
+  outline: none;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-block-end: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.app-header__name {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+}
+
+.app-header__repo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.app-header__member {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.app-header__settings {
+  margin-inline-start: auto;
+}
+
+.app-nav {
+  padding-inline: var(--space-4);
+  border-block-end: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.app-nav__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.app-main {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  padding: var(--space-4);
+}
+
+/* Skip links move focus here; the ring goes inside the box so it cannot cause horizontal scrolling. */
+.app-main:focus-visible {
+  outline-offset: calc(-1 * var(--focus-width));
+}
+
+.sign-in {
+  max-inline-size: 28rem;
+}
+
+/*
+ * Small layout helpers the views can share. Grids that stack things use one column that may shrink to
+ * zero (`minmax(0, 1fr)`): with the default `auto` column a wide control or a long word sets the
+ * column's minimum width and pushes the page wider than a 320 px screen.
+ */
+.stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-content: start;
+}
+
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Data tables may scroll sideways (WCAG 1.4.10 exempts them); the wrapper must be focusable to be usable. */
+.table-scroll {
+  max-inline-size: 100%;
+  overflow-x: auto;
+}

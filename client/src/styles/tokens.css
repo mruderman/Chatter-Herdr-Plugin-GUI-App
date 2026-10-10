@@ -1,0 +1,241 @@
+/*
+ * Design tokens: every colour, size and timing the rest of the CSS uses. Components never write a
+ * colour literal; tokens.test.ts fails the build if one appears outside this file.
+ *
+ * Themes. While the choice is "System" there is no `data-theme` attribute on <html> and the two @media
+ * blocks at the bottom decide: forced colours or prefers-contrast: more give the hc (high contrast)
+ * tokens, otherwise prefers-color-scheme: dark gives dark, otherwise light. They follow the system
+ * live, with no script, so nothing flashes at load for someone who prefers dark or high contrast. An
+ * explicit choice in Settings puts `data-theme="light|dark|hc"` on <html> (features/shell/theme.ts),
+ * which beats the media queries. CSS cannot share one rule between a selector and a media query, so
+ * the @media blocks repeat the dark and hc tokens; tokens.test.ts checks the repeats are identical to
+ * the explicit blocks.
+ *
+ * Contrast. tokens.test.ts holds the table of foreground/background pairs and asserts WCAG ratios
+ * for all three themes: 4.5:1 for text and 3:1 for UI components and the focus ring (7:1 and 4.5:1
+ * in hc, which exists to exceed the minimum). A colour token that no pair covers fails the test, so
+ * adding a token means declaring where it is used.
+ */
+
+:root {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* rem so that larger browser text sizes scale layout and spacing with the text. */
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.25rem;
+  --font-size-xl: 1.5rem;
+  --line-height: 1.5;
+  --line-height-tight: 1.25;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-pill: 999px;
+
+  /* WCAG 2.2 target size is 24 CSS px; the px floor keeps it when someone shrinks the root font. */
+  --target-min: max(2.5rem, 24px);
+  --checkbox-size: max(1.5rem, 24px);
+
+  /* Pixels on purpose: the ring must stay at least 3px whatever the text size. */
+  --focus-width: 3px;
+  --focus-offset: 2px;
+
+  --dialog-width: 32rem;
+  --transition-fast: 120ms ease-out;
+}
+
+/* Light: the default and the explicit choice. */
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --color-bg: #f3f5f7;
+  --color-surface: #ffffff;
+  --color-surface-alt: #e6ebf0;
+  --color-text: #14181d;
+  --color-text-muted: #414b57;
+  --color-border: #66717f;
+  --color-link: #0b55a6;
+  --color-accent: #0a6679;
+  --color-on-accent: #ffffff;
+  --color-focus: #1a47c9;
+  --color-selected-bg: #cfe8ef;
+  --color-selected-text: #0a2f38;
+  --color-danger-solid: #b3261e;
+  --color-on-danger-solid: #ffffff;
+  --color-scrim: #14181dc7;
+
+  --tone-neutral-bg: #e6ebf0;
+  --tone-neutral-text: #14181d;
+  --tone-neutral-border: #66717f;
+  --tone-info-bg: #dce9fb;
+  --tone-info-text: #0a3366;
+  --tone-info-border: #2f64b8;
+  --tone-success-bg: #def3e4;
+  --tone-success-text: #0b431d;
+  --tone-success-border: #2a7344;
+  --tone-warning-bg: #fcefc7;
+  --tone-warning-text: #5a3a00;
+  --tone-warning-border: #8f6300;
+  --tone-danger-bg: #fbe1df;
+  --tone-danger-text: #6f0f0a;
+  --tone-danger-border: #b3261e;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-bg: #0e1216;
+  --color-surface: #161b21;
+  --color-surface-alt: #222a33;
+  --color-text: #e9eef3;
+  --color-text-muted: #a9b4c0;
+  --color-border: #7d8a99;
+  --color-link: #82c1ff;
+  --color-accent: #4fc6dc;
+  --color-on-accent: #04202a;
+  --color-focus: #ffd166;
+  --color-selected-bg: #17434f;
+  --color-selected-text: #e3f7fb;
+  --color-danger-solid: #cc3b32;
+  --color-on-danger-solid: #ffffff;
+  --color-scrim: #000000d9;
+
+  --tone-neutral-bg: #222a33;
+  --tone-neutral-text: #e9eef3;
+  --tone-neutral-border: #7d8a99;
+  --tone-info-bg: #13304f;
+  --tone-info-text: #d2e5ff;
+  --tone-info-border: #5b9ce6;
+  --tone-success-bg: #123a26;
+  --tone-success-text: #cdf3da;
+  --tone-success-border: #3fae6b;
+  --tone-warning-bg: #3f300a;
+  --tone-warning-text: #ffe8a8;
+  --tone-warning-border: #d4a017;
+  --tone-danger-bg: #4a1816;
+  --tone-danger-text: #ffd6d2;
+  --tone-danger-border: #f0786d;
+}
+
+:root[data-theme='hc'] {
+  color-scheme: dark;
+
+  --color-bg: #000000;
+  --color-surface: #000000;
+  --color-surface-alt: #1a1a1a;
+  --color-text: #ffffff;
+  --color-text-muted: #e0e0e0;
+  --color-border: #ffffff;
+  --color-link: #9ad7ff;
+  --color-accent: #ffff00;
+  --color-on-accent: #000000;
+  --color-focus: #00e5ff;
+  --color-selected-bg: #003a8c;
+  --color-selected-text: #ffffff;
+  --color-danger-solid: #ff6a5f;
+  --color-on-danger-solid: #000000;
+  --color-scrim: #000000f2;
+
+  --tone-neutral-bg: #1a1a1a;
+  --tone-neutral-text: #ffffff;
+  --tone-neutral-border: #ffffff;
+  --tone-info-bg: #00264d;
+  --tone-info-text: #ffffff;
+  --tone-info-border: #7fc4ff;
+  --tone-success-bg: #00330f;
+  --tone-success-text: #ffffff;
+  --tone-success-border: #5dff8a;
+  --tone-warning-bg: #332600;
+  --tone-warning-text: #ffffff;
+  --tone-warning-border: #ffd34d;
+  --tone-danger-bg: #4d0000;
+  --tone-danger-text: #ffffff;
+  --tone-danger-border: #ff8a80;
+}
+
+/* "System" (no data-theme attribute): the same values as the explicit dark and hc blocks, chosen by the media queries. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --color-bg: #0e1216;
+    --color-surface: #161b21;
+    --color-surface-alt: #222a33;
+    --color-text: #e9eef3;
+    --color-text-muted: #a9b4c0;
+    --color-border: #7d8a99;
+    --color-link: #82c1ff;
+    --color-accent: #4fc6dc;
+    --color-on-accent: #04202a;
+    --color-focus: #ffd166;
+    --color-selected-bg: #17434f;
+    --color-selected-text: #e3f7fb;
+    --color-danger-solid: #cc3b32;
+    --color-on-danger-solid: #ffffff;
+    --color-scrim: #000000d9;
+
+    --tone-neutral-bg: #222a33;
+    --tone-neutral-text: #e9eef3;
+    --tone-neutral-border: #7d8a99;
+    --tone-info-bg: #13304f;
+    --tone-info-text: #d2e5ff;
+    --tone-info-border: #5b9ce6;
+    --tone-success-bg: #123a26;
+    --tone-success-text: #cdf3da;
+    --tone-success-border: #3fae6b;
+    --tone-warning-bg: #3f300a;
+    --tone-warning-text: #ffe8a8;
+    --tone-warning-border: #d4a017;
+    --tone-danger-bg: #4a1816;
+    --tone-danger-text: #ffd6d2;
+    --tone-danger-border: #f0786d;
+  }
+}
+
+/* Listed after the dark block so that, at equal specificity, high contrast wins over dark. */
+@media (prefers-contrast: more), (forced-colors: active) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --color-bg: #000000;
+    --color-surface: #000000;
+    --color-surface-alt: #1a1a1a;
+    --color-text: #ffffff;
+    --color-text-muted: #e0e0e0;
+    --color-border: #ffffff;
+    --color-link: #9ad7ff;
+    --color-accent: #ffff00;
+    --color-on-accent: #000000;
+    --color-focus: #00e5ff;
+    --color-selected-bg: #003a8c;
+    --color-selected-text: #ffffff;
+    --color-danger-solid: #ff6a5f;
+    --color-on-danger-solid: #000000;
+    --color-scrim: #000000f2;
+
+    --tone-neutral-bg: #1a1a1a;
+    --tone-neutral-text: #ffffff;
+    --tone-neutral-border: #ffffff;
+    --tone-info-bg: #00264d;
+    --tone-info-text: #ffffff;
+    --tone-info-border: #7fc4ff;
+    --tone-success-bg: #00330f;
+    --tone-success-text: #ffffff;
+    --tone-success-border: #5dff8a;
+    --tone-warning-bg: #332600;
+    --tone-warning-text: #ffffff;
+    --tone-warning-border: #ffd34d;
+    --tone-danger-bg: #4d0000;
+    --tone-danger-text: #ffffff;
+    --tone-danger-border: #ff8a80;
+  }
+}

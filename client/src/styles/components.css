@@ -1,0 +1,317 @@
+/*
+ * Components. Colour is never the only signal: every state below also changes text, shape or border
+ * (a label, a marker shape, a bar, a dashed border). Tones are chosen with a class (`tone-info`) that
+ * sets three local variables, so badges, alerts and the connection indicator share one palette.
+ */
+
+/* Tones */
+.tone-neutral {
+  --tint-bg: var(--tone-neutral-bg);
+  --tint-text: var(--tone-neutral-text);
+  --tint-border: var(--tone-neutral-border);
+}
+
+.tone-info {
+  --tint-bg: var(--tone-info-bg);
+  --tint-text: var(--tone-info-text);
+  --tint-border: var(--tone-info-border);
+}
+
+.tone-success {
+  --tint-bg: var(--tone-success-bg);
+  --tint-text: var(--tone-success-text);
+  --tint-border: var(--tone-success-border);
+}
+
+.tone-warning {
+  --tint-bg: var(--tone-warning-bg);
+  --tint-text: var(--tone-warning-text);
+  --tint-border: var(--tone-warning-border);
+}
+
+.tone-danger {
+  --tint-bg: var(--tone-danger-bg);
+  --tint-text: var(--tone-danger-text);
+  --tint-border: var(--tone-danger-border);
+}
+
+/* Buttons: variants over the base <button> in base.css. */
+.button--primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+/* The hover cue is an inner ring in the text colour, so it does not depend on a second shade. */
+.button--primary:hover {
+  background: var(--color-accent);
+  box-shadow: inset 0 0 0 2px var(--color-on-accent);
+}
+
+.button--danger {
+  border-color: var(--color-danger-solid);
+  background: var(--color-danger-solid);
+  color: var(--color-on-danger-solid);
+}
+
+.button--danger:hover {
+  background: var(--color-danger-solid);
+  box-shadow: inset 0 0 0 2px var(--color-on-danger-solid);
+}
+
+.button--primary:disabled,
+.button--primary[aria-disabled='true'],
+.button--danger:disabled,
+.button--danger[aria-disabled='true'] {
+  box-shadow: none;
+}
+
+/* Primary navigation: tab-like buttons; the current one gets a bar and bold text, not only a tint. */
+.nav-button {
+  border-color: transparent;
+  border-block-end: 4px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+}
+
+.nav-button[aria-current='page'] {
+  border-block-end-color: var(--color-accent);
+  background: var(--color-selected-bg);
+  color: var(--color-selected-text);
+  font-weight: 700;
+}
+
+.nav-button[aria-current='page']:hover {
+  background: var(--color-selected-bg);
+}
+
+/* Fields */
+.field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+}
+
+.field--inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.field__hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 400;
+}
+
+/* Badges: a text label is always present; the tone is a second cue. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--tint-border, var(--tone-neutral-border));
+  border-radius: var(--radius-pill);
+  background: var(--tint-bg, var(--tone-neutral-bg));
+  color: var(--tint-text, var(--tone-neutral-text));
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  line-height: var(--line-height);
+  white-space: nowrap;
+}
+
+/*
+ * Connection indicator: the text (Online, Syncing, Offline, Access revoked) is the signal. The marker
+ * shape (filled circle, half circle, hollow circle, diamond) and the tone repeat it for sighted users.
+ */
+.connection {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 2px solid var(--tint-border, var(--tone-neutral-border));
+  border-radius: var(--radius-pill);
+  background: var(--tint-bg, var(--tone-neutral-bg));
+  color: var(--tint-text, var(--tone-neutral-text));
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  line-height: var(--line-height);
+  white-space: nowrap;
+}
+
+.connection::before {
+  content: '';
+  flex: none;
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  border: 2px solid currentColor;
+}
+
+.connection--online::before {
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.connection--syncing::before {
+  border-radius: 50%;
+  background: linear-gradient(90deg, currentColor 50%, transparent 50%);
+}
+
+.connection--offline::before {
+  border-radius: 50%;
+}
+
+.connection--revoked::before {
+  background: currentColor;
+  transform: rotate(45deg) scale(0.85);
+}
+
+/* Alerts */
+.alert {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 2px solid var(--tint-border, var(--tone-neutral-border));
+  border-inline-start-width: 8px;
+  border-radius: var(--radius-md);
+  background: var(--tint-bg, var(--tone-neutral-bg));
+  color: var(--tint-text, var(--tone-neutral-text));
+  overflow-wrap: anywhere;
+}
+
+/* Skip links: out of sight until focused, then the first thing on the page. */
+.skip-link {
+  position: absolute;
+  z-index: 100;
+  inset-block-start: var(--space-2);
+  inset-inline-start: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--target-min);
+  padding: 0 var(--space-4);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-link);
+  font-weight: 600;
+  transform: translateY(-300%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+/* Dialog: a native modal <dialog>. No `display` here, so the browser's closed state stays hidden. */
+.dialog {
+  inline-size: min(var(--dialog-width), calc(100vw - 1rem));
+  max-block-size: calc(100vh - 1rem);
+  max-block-size: calc(100dvh - 1rem);
+  padding: 0;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  overflow: auto;
+}
+
+.dialog::backdrop {
+  background: var(--color-scrim);
+}
+
+/* Less padding on narrow screens, where larger text leaves little room inside a dialog. */
+.dialog__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+@media (min-width: 30rem) {
+  .dialog__body {
+    padding: var(--space-5);
+  }
+}
+
+.dialog__title {
+  margin: 0;
+}
+
+.dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.settings-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  padding-block-start: var(--space-4);
+  border-block-start: 1px solid var(--color-border);
+}
+
+.settings-section h3 {
+  margin: 0;
+}
+
+/* Text for assistive technology only (live regions, extra context). */
+.visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * Forced colours (Windows high contrast and similar) replace author colours with system colours and
+ * drop backgrounds, so shapes that were drawn with a background are redrawn in system colours.
+ * Text that is not in the default text colour says so with a system colour too: the browser would
+ * force it anyway, but audit tools read the colour the author wrote and would compare, for example,
+ * the muted grey of the high-contrast theme with the forced canvas.
+ */
+@media (forced-colors: active) {
+  a {
+    color: LinkText;
+  }
+
+  .field__hint {
+    color: CanvasText;
+  }
+
+  /* The tint and the coloured bar that mark the current page are flattened, so add a shape. */
+  .nav-button[aria-current='page'] {
+    text-decoration: underline;
+    text-decoration-thickness: 0.15em;
+    text-underline-offset: 0.25em;
+  }
+
+  .connection::before {
+    forced-color-adjust: none;
+    border-color: CanvasText;
+  }
+
+  .connection--online::before,
+  .connection--revoked::before {
+    background: CanvasText;
+  }
+
+  .connection--syncing::before {
+    background: linear-gradient(90deg, CanvasText 50%, transparent 50%);
+  }
+
+  button[aria-disabled='true'] {
+    color: GrayText;
+  }
+}

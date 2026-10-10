@@ -1,0 +1,213 @@
+/*
+ * Reset, element defaults, the focus ring and the reduced-motion rule. Plain elements are styled here
+ * (a bare <button>, <select>, <table> already looks right); class variants live in components.css.
+ * Selectors stay at element or single-class specificity so a feature's own stylesheet can override.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  background: var(--color-bg);
+}
+
+body {
+  margin: 0;
+  min-block-size: 100vh;
+  min-block-size: 100dvh;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height);
+  /* A long unbroken string (a URL, a pasted token) wraps instead of widening the page. */
+  overflow-wrap: break-word;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 var(--space-3);
+  line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
+}
+
+h1 {
+  font-size: var(--font-size-xl);
+}
+
+h2 {
+  font-size: var(--font-size-lg);
+}
+
+h3 {
+  font-size: var(--font-size-base);
+}
+
+p {
+  margin: 0 0 var(--space-3);
+}
+
+/* Underlined so a link is never told apart from its text by colour alone. */
+a {
+  color: var(--color-link);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+/*
+ * One focus ring for everything: 3px, offset so the gap shows the surrounding surface and the ring
+ * is judged against that surface (tokens.test.ts pairs --color-focus with every surface). An outline,
+ * not a box-shadow, because forced-colors mode drops shadows and keeps outlines.
+ */
+:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-block-size: var(--target-min);
+  min-inline-size: var(--target-min);
+  padding: 0 var(--space-4);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 600;
+  line-height: var(--line-height-tight);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+button:hover {
+  background: var(--color-surface-alt);
+}
+
+/* aria-disabled keeps the button focusable; it reads as inactive without relying on colour. */
+button:disabled,
+button[aria-disabled='true'] {
+  border-style: dashed;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+input,
+select,
+textarea {
+  min-block-size: var(--target-min);
+  max-inline-size: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  line-height: var(--line-height);
+}
+
+/* Browsers fade placeholders with opacity and a grey of their own; this keeps them at the muted token's contrast. */
+::placeholder {
+  color: var(--color-text-muted);
+  opacity: 1;
+}
+
+textarea {
+  min-inline-size: 0;
+  resize: vertical;
+}
+
+input[readonly] {
+  background: var(--color-surface-alt);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  border-style: dashed;
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  flex: none;
+  inline-size: var(--checkbox-size);
+  block-size: var(--checkbox-size);
+  min-block-size: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--color-accent);
+}
+
+label {
+  font-weight: 600;
+}
+
+table {
+  border-collapse: collapse;
+  inline-size: 100%;
+}
+
+caption {
+  padding-block-end: var(--space-2);
+  font-weight: 700;
+  text-align: start;
+}
+
+th,
+td {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  text-align: start;
+  vertical-align: top;
+}
+
+th {
+  background: var(--color-surface-alt);
+  font-weight: 700;
+}
+
+ul,
+ol {
+  margin: 0 0 var(--space-3);
+  padding-inline-start: var(--space-5);
+}
+
+/*
+ * Reduced motion removes every transition and animation, not only the ones written here, so a rule
+ * added later cannot forget to opt out. `none` rather than a near-zero duration: nothing runs.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

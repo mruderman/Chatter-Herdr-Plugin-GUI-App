@@ -1,12 +1,22 @@
 // Canary for the unit-test toolchain: when this fails, suspect the tooling before the app.
-// The heading and axe tests target the placeholder in src/main.tsx; retarget them when that file is replaced.
+// The heading and axe tests target the shell's pending-session view (the page's first state; it replaced
+// the placeholder that used to live in src/main.tsx). Retarget them if that view goes away.
 import { screen } from '@testing-library/dom';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { useEffect, useState } from 'preact/hooks';
 import { describe, expect, it } from 'vitest';
-import { Placeholder } from '../src/main';
+import { PendingSessionView } from '../src/features/shell';
 import { cleanup, render } from './render';
+
+// The shell, not the view, supplies <main>.
+function Placeholder() {
+  return (
+    <main>
+      <PendingSessionView />
+    </main>
+  );
+}
 
 // jsdom has no layout engine, so colour contrast is left to the real-browser E2E run.
 const AXE_OPTIONS: axe.RunOptions = { rules: { 'color-contrast': { enabled: false } } };
