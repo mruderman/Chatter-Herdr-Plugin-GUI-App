@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { body, recordedError } from '../../test/fixtures/recorded';
 import { parseDirectory, parseMessagesPage, parseRepos } from '../api/guards';
-import { CHANNEL, type Message } from '../api/types';
+import { CHANNEL, type Directory, type Message } from '../api/types';
 import { createFakeStore, FAKE_TOKEN, type FakeStoreOptions } from './fake';
 import type { IncomingMessage, StoreSnapshot } from './types';
 
@@ -31,6 +31,14 @@ const refusal = (name: string) => {
   const { code, message } = recordedError(name);
   return { code, message };
 };
+/** The directory after the admin panel revoked ezra and temp, and a new member and a new agent turned up. */
+const changedDirectory = (): Directory => {
+  const { members, agents } = parseDirectory(body('directory'));
+  return {
+    members: [...members.filter((m) => m.handle !== 'ezra' && m.handle !== 'temp'), { handle: 'wren', display_name: 'Wren', kind: 'human' }],
+    agents: [...agents, 'sage'],
+  };
+};
 
 describe('fake store: seeded from the recordings', () => {
   it('starts signed in as thom with the recorded directory, repos and #chat', () => {
@@ -52,8 +60,15 @@ describe('fake store: seeded from the recordings', () => {
     expect(fake().labels()).toEqual(['#chat', 'DM with codex', 'DM with grace', 'DM with mira']);
   });
 
-  it('gives the admin his own DMs and every other DM, labelled by its first direction', () => {
-    expect(fake({ as: 'flan' }).labels()).toEqual(['#chat', 'DM with codex', 'DM thom to codex', 'DM thom to grace', 'DM thom to mira']);
+  it('gives the admin his own DMs and every other DM, each labelled by its two handles in alphabetical order', () => {
+    const f = fake({ as: 'flan' });
+    expect(f.labels()).toEqual(['#chat', 'DM with codex', 'DM codex to thom', 'DM grace to thom', 'DM mira to thom']);
+    // `from` and `to` are the same alphabetical order and say nothing about who wrote first.
+    expect(f.now().conversations.flatMap((c) => (c.kind === 'observed' ? [[c.from, c.to]] : []))).toEqual([
+      ['codex', 'thom'],
+      ['grace', 'thom'],
+      ['mira', 'thom'],
+    ]);
   });
 
   it('gives kieran, who has no DMs, #chat alone', () => {
@@ -109,6 +124,90 @@ describe('fake store: sessions', () => {
     const s = f.now();
     expect(s.session).toEqual({ status: 'signed-out', error: null });
     expect([s.directory, s.selectedRepo, s.repos, s.messages]).toEqual([null, null, [], []]);
+  });
+
+  // UI contract section 1: a first load that gets 403 not_registered shows its error at once, one
+  // that gets a plain 401 shows none because nothing has been tried yet.
+  it('can start signed out with the bridge\'s 403 not_registered, and nothing loaded', () => {
+    const s = fake({ session: 'not-registered' }).now();
+    expect(s.session).toEqual({
+      status: 'signed-out',
+      error: { code: 'not_registered', message: 'your Tailscale login is not registered as a member' },
+    });
+    expect([s.directory, s.selectedRepo, s.selectedConversation]).toEqual([null, null, null]);
+    expect([s.repos, s.conversations, s.messages]).toEqual([[], [], []]);
+  });
+
+  it('starts signed out with no error when the first load was a plain 401', () => {
+    expect(fake({ session: 'signed-out' }).now().session).toEqual({ status: 'signed-out', error: null });
+  });
+
+  it('replaces the 403 with the failure of a token that is tried, and signs in with the right one', async () => {
+    const f = fake({ session: 'not-registered' });
+    expect(f.now().session).toMatchObject({ status: 'signed-out', error: { code: 'not_registered' } });
+    expect(await f.store.signIn('wrong')).toBe(false);
+    expect(f.now().session).toEqual({ status: 'signed-out', error: refusal('me-bad-token') });
+    expect(await f.store.signIn(FAKE_TOKEN)).toBe(true);
+    expect(f.now().session.status).toBe('signed-in');
+  });
+});
+
+describe('fake store: the directory', () => {
+  it('keeps the old directory until refreshDirectory() runs, then publishes the staged one', async () => {
+    const f = fake();
+    const before = f.now();
+    const staged = changedDirectory();
+    f.store.setDirectory(staged);
+    expect(f.now()).toBe(before);
+    expect(f.snapshots).toHaveLength(0);
+    await f.store.refreshDirectory();
+    expect(f.now().directory).toEqual(staged);
+    expect(f.now()).not.toBe(before);
+    expect(f.snapshots).toEqual([f.now()]);
+    expect(Object.isFrozen(f.now().directory)).toBe(true);
+    // The snapshot holds a copy: freezing it must not reach into the test's own object.
+    expect(Object.isFrozen(staged)).toBe(false);
+  });
+
+  it('publishes nothing when the directory has not changed since it was loaded or last refreshed', async () => {
+    const f = fake();
+    const before = f.now();
+    await f.store.refreshDirectory();
+    expect(f.now()).toBe(before);
+    f.store.setDirectory(changedDirectory());
+    await f.store.refreshDirectory();
+    const after = f.now();
+    await f.store.refreshDirectory();
+    expect(f.now()).toBe(after);
+    expect(f.snapshots).toEqual([after]);
+  });
+
+  it('does nothing while nobody is signed in, and a later sign-in loads the directory the bridge has by then', async () => {
+    for (const session of ['signed-out', 'unknown', 'not-registered'] as const) {
+      const f = fake({ session });
+      f.store.setDirectory(changedDirectory());
+      await f.store.refreshDirectory();
+      expect(f.now().directory).toBeNull();
+      expect(f.snapshots).toHaveLength(0);
+    }
+    const f = fake();
+    f.store.signOut();
+    f.store.setDirectory(changedDirectory());
+    const published = f.snapshots.length;
+    await f.store.refreshDirectory();
+    expect(f.now().directory).toBeNull();
+    expect(f.snapshots).toHaveLength(published);
+    expect(await f.store.signIn(FAKE_TOKEN)).toBe(true);
+    expect(f.now().directory).toEqual(changedDirectory());
+  });
+
+  it('after dispose, leaves the directory and the snapshot as they were', async () => {
+    const f = fake();
+    const before = f.now();
+    f.store.dispose();
+    f.store.setDirectory(changedDirectory());
+    await f.store.refreshDirectory();
+    expect(f.now()).toBe(before);
   });
 });
 
@@ -274,16 +373,35 @@ describe('fake store: arrivals, announcements and notifications', () => {
     expect(f.now().announcement).toEqual({ text: '2 new messages in #chat', seq: 2 });
   });
 
-  it('names every conversation a burst spans, and repeats an identical text under a new seq', () => {
+  it('counts the conversations a burst spans instead of naming them, and repeats an identical text under a new seq', () => {
     const f = fake();
     f.store.receive({ from: 'mira', body: 'first' });
     f.store.receive({ from: 'mira', to: 'thom', body: 'in private' });
     f.store.receive({ from: 'grace', body: 'in public' });
     f.store.clock.advance(3_000);
-    expect(f.now().announcement).toEqual({ text: '2 new messages in DM with mira, #chat', seq: 2 });
+    expect(f.now().announcement).toEqual({ text: '2 new messages in 2 conversations', seq: 2 });
     f.store.clock.advance(10_000);
     f.store.receive({ from: 'mira', body: 'first' });
     expect(f.now().announcement).toEqual({ text: 'mira: first', seq: 3 });
+  });
+
+  it('counts messages and conversations separately: three messages in two conversations', () => {
+    const f = fake();
+    f.store.receive({ from: 'mira', body: 'one' });
+    f.store.receive({ from: 'mira', body: 'two' });
+    f.store.receive({ from: 'mira', to: 'thom', body: 'three' });
+    f.store.receive({ from: 'grace', body: 'four' });
+    f.store.clock.advance(3_000);
+    expect(f.now().announcement).toEqual({ text: '3 new messages in 2 conversations', seq: 2 });
+  });
+
+  it('names the conversation when a whole burst is in one DM', () => {
+    const f = fake();
+    f.store.receive({ from: 'mira', to: 'thom', body: 'one' });
+    f.store.receive({ from: 'mira', to: 'thom', body: 'two' });
+    f.store.receive({ from: 'mira', to: 'thom', body: 'three' });
+    f.store.clock.advance(3_000);
+    expect(f.now().announcement).toEqual({ text: '2 new messages in DM with mira', seq: 2 });
   });
 
   it('cuts a long announcement at 140 characters, not inside one', () => {
@@ -305,12 +423,25 @@ describe('fake store: arrivals, announcements and notifications', () => {
     expect(() => fake({ as: 'flan' }).store.receive({ from: 'mira', to: 'grace', body: 'private' })).not.toThrow();
   });
 
-  it('labels the admin\'s view of a new DM pair by its first direction, for good', () => {
+  it.each([
+    ['mira', 'grace'],
+    ['grace', 'mira'],
+  ] as const)('shows the admin a new DM pair as one conversation labelled in alphabetical order, whichever way it began (%s first)', (first, second) => {
     const f = fake({ as: 'flan' });
-    f.store.receive({ from: 'grace', to: 'mira', body: 'hi' });
-    f.store.receive({ from: 'mira', to: 'grace', body: 'hi back' });
-    expect(f.labels()).toContain('DM grace to mira');
-    expect(f.labels()).not.toContain('DM mira to grace');
+    f.store.receive({ from: first, to: second, body: 'hi' });
+    f.store.receive({ from: second, to: first, body: 'hi back' });
+    expect(f.labels().filter((label) => label === 'DM grace to mira' || label === 'DM mira to grace')).toEqual(['DM grace to mira']);
+    expect(f.now().conversations.find((c) => c.label === 'DM grace to mira')).toMatchObject({ kind: 'observed', from: 'grace', to: 'mira' });
+    f.open('DM grace to mira');
+    expect(f.now().messages.map((m) => m.body)).toEqual(['hi', 'hi back']);
+  });
+
+  it('orders the two handles by plain string comparison, which localeCompare would not for _ and -', () => {
+    const f = fake({ as: 'flan' });
+    f.store.receive({ from: 'a_b', to: 'a-b', body: 'hi' });
+    // Code units rank '-' (0x2D) before '_' (0x5F); ICU's collation ranks '_' first.
+    expect(f.labels()).toContain('DM a-b to a_b');
+    expect(f.labels()).not.toContain('DM a_b to a-b');
   });
 
   it('passes on a message for another repo without announcing it', () => {

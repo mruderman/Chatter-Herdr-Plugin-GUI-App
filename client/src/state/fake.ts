@@ -49,11 +49,19 @@ const KIND_DM = 'chat';
 const EVERYONE = 'everyone';
 // policy.js says this; no recording has it, because no client can send a NUL through JSON by accident.
 const NUL_MESSAGE = 'message contains a NUL byte';
+// bridge/src/auth.js:55 sends this with 403 not_registered, on the tailnet-identity path only, which
+// the recorder does not use, so no recording has it. The text was confirmed by running that authenticator.
+const NOT_REGISTERED_MESSAGE = 'your Tailscale login is not registered as a member';
 
 export interface FakeStoreOptions {
   readonly as?: FakeMember;
-  /** Where the session starts. Signed in (the default) loads the member's recorded data at once. */
-  readonly session?: Session['status'];
+  /**
+   * Where the session starts. Signed in (the default) loads the member's recorded data at once.
+   * 'signed-out' is a first load that got a plain 401, so there is no error to explain;
+   * 'not-registered' is one that got the bridge's 403 not_registered, which carries its error
+   * (UI contract section 1). Every start except signed in has nothing loaded.
+   */
+  readonly session?: Session['status'] | 'not-registered';
   /** Messages per page, newest first; older pages come with loadOlder(). Default: everything at once. */
   readonly pageSize?: number;
   /** The read pointer of every repo. Default: the recorded one (0, except mira's 5). */
@@ -83,6 +91,13 @@ export interface FakeStore extends Store {
   receive(message: ArrivingMessage): Message;
   setConnection(connection: Connection): void;
   readPointer(repo: string): number;
+  /**
+   * Changes the directory the bridge answers with from now on, as the admin panel does when it adds,
+   * edits or revokes a member. The store keeps showing its old one until refreshDirectory() runs; a
+   * member who signs in later is shown this one. The directory goes through the guard, so a test
+   * cannot stage a shape the bridge never sends, and the caller's object is never frozen.
+   */
+  setDirectory(directory: Directory): void;
 }
 
 interface RepoState {
@@ -94,8 +109,6 @@ interface RepoState {
   readPointer: number;
   /** The highest id the table holds, visible or not: the next message gets maxId + 1. */
   maxId: number;
-  /** The direction an observed DM pair was first seen in, which fixes its label. */
-  readonly firstSeen: Map<ConversationId, { readonly from: string; readonly to: string }>;
 }
 
 interface Pending {
@@ -117,8 +130,17 @@ function mentionsOf(text: string): { handles: string[]; everyone: boolean } {
   return { handles: [...handles], everyone };
 }
 
+/**
+ * The two handles of a DM in alphabetical order, whichever way a message went. Plain code-unit
+ * comparison, as `[a, b].sort()` does: handles use a-z, 0-9, `_` and `-`, and `localeCompare` ranks
+ * the last three differently ('a_b' before 'a-b') with a result that depends on the runtime's ICU.
+ */
+function pairOf(a: string, b: string): readonly [string, string] {
+  return a <= b ? [a, b] : [b, a];
+}
+
 function dmId(a: string, b: string): ConversationId {
-  return `dm:${JSON.stringify([a, b].sort())}`;
+  return `dm:${JSON.stringify(pairOf(a, b))}`;
 }
 
 function belongsTo(message: Message, id: ConversationId): boolean {
@@ -177,6 +199,9 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
 
   let session: Session = { status: 'unknown' };
   let connection: Connection = 'online';
+  // What /v1/directory answers right now, as against `directory`, what the store has fetched. They
+  // are one object until setDirectory(), so a refresh that finds nothing new publishes nothing.
+  let served = parseDirectory(body('directory'));
   let directory: Directory | null = null;
   let repos = new Map<string, RepoState>();
   let selectedRepo: string | null = null;
@@ -203,16 +228,12 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
         const peer = message.from === member.handle ? message.to : message.from;
         direct.set(id, { kind: 'direct', id, label: `DM with ${peer}`, peer });
       } else {
-        let pair = repo.firstSeen.get(id);
-        if (!pair) {
-          pair = { from: message.from, to: message.to };
-          repo.firstSeen.set(id, pair);
-        }
-        observed.set(id, { kind: 'observed', id, label: `DM ${pair.from} to ${pair.to}`, from: pair.from, to: pair.to });
+        const [from, to] = pairOf(message.from, message.to);
+        observed.set(id, { kind: 'observed', id, label: `DM ${from} to ${to}`, from, to });
       }
     }
     const byPeer = [...direct.values()].sort((a, b) => a.peer.localeCompare(b.peer));
-    const pairKey = (c: { from: string; to: string }): string => [c.from, c.to].sort().join(' ');
+    const pairKey = (c: { from: string; to: string }): string => `${c.from} ${c.to}`;
     const byPair = [...observed.values()].sort((a, b) => pairKey(a).localeCompare(pairKey(b)));
     return [CHANNEL_CONVERSATION, ...byPeer, ...byPair];
   }
@@ -259,7 +280,7 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
   function load(): void {
     const names = FAKE_MEMBERS[as];
     const member = parseMe(body(names.me));
-    directory = parseDirectory(body('directory'));
+    directory = served;
     const pages = [parseMessagesPage(body(names.messages)), parseMessagesPage(body(SECOND_REPO_MESSAGES))];
     repos = new Map(parseRepos(body(names.repos)).repos.map((repo): [string, RepoState] => {
       const page = pages.find((p) => p.repo === repo.key);
@@ -270,7 +291,6 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
         loaded: Math.min(messages.length, pageSize),
         readPointer: options.lastReadId ?? repo.last_read_id,
         maxId: Math.max(page?.max_id ?? 0, ...messages.map((m) => m.id)),
-        firstSeen: new Map(),
       }];
     }));
     session = { status: 'signed-in', me: member };
@@ -301,9 +321,10 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
     if (queue.length === 1 && only) {
       text = `${only.message.from}: ${Array.from(only.message.body).slice(0, ANNOUNCE_CHARS).join('')}`;
     } else {
-      // The fake's own placeholder: the UI contract names one conversation for a burst and is
-      // silent on a burst spanning several, so this lists them all until G1 rules.
-      text = `${queue.length} new messages in ${[...new Set(queue.map((p) => p.label))].join(', ')}`;
+      // UI contract section 3: a burst in one conversation names it, one across several counts them.
+      const labels = new Set(queue.map((pending) => pending.label));
+      const where = labels.size > 1 ? `${labels.size} conversations` : (only?.label ?? CHANNEL);
+      text = `${queue.length} new messages in ${where}`;
     }
     announcement = { text, seq: (announcement?.seq ?? 0) + 1 };
     lastAnnouncedAt = clock.now();
@@ -331,7 +352,9 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
   }
 
   if (options.session === 'signed-out') session = { status: 'signed-out', error: null };
-  else if (options.session !== 'unknown') load();
+  else if (options.session === 'not-registered') {
+    session = { status: 'signed-out', error: { code: ERROR_CODES.notRegistered, message: NOT_REGISTERED_MESSAGE } };
+  } else if (options.session !== 'unknown') load();
   snapshot = build();
 
   return {
@@ -441,6 +464,15 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       return Promise.resolve();
     },
 
+    refreshDirectory() {
+      // The fake's fetch cannot fail, so the contract's "a failure keeps the old directory" is the real store's to keep.
+      if (!disposed && me() && directory !== served) {
+        directory = served;
+        publish();
+      }
+      return Promise.resolve();
+    },
+
     dispose() {
       disposed = true;
       cancelFlush?.();
@@ -489,6 +521,11 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       const repo = repos.get(key);
       if (!repo) throw new Error(`fake store: no repo "${key}"`);
       return repo.readPointer;
+    },
+
+    setDirectory(next) {
+      // A copy through the guard: build() freezes what it publishes, and that must not reach the caller's object.
+      served = parseDirectory(next);
     },
   };
 }

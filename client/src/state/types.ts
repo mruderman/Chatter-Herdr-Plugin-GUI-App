@@ -50,11 +50,10 @@ export type ConversationId = string;
  * A button in the Conversations navigation; `label` is its accessible name, exactly:
  *   channel   "#chat"
  *   direct    "DM with {peer}": a DM the member sends or receives; peer is a member or an agent
- *   observed  "DM {from} to {to}": the admin's view of a DM between two others, both directions
- *             in one conversation.
- * PROVISIONAL, awaiting the coordinator's ruling at G1: the UI contract does not say which handle
- * comes first for a two-way thread. Until then from and to are the sender and recipient of the
- * first message of that pair the store saw, fixed for the session.
+ *   observed  "DM {from} to {to}": the admin's view of a DM between two others. One conversation
+ *             covers both directions, so `from` and `to` are the pair's two handles in
+ *             alphabetical order (plain string comparison, as `[a, b].sort()` does, never a locale
+ *             order) and imply no direction: the first handle did not necessarily write first.
  * A DM conversation appears when a message of it is loaded or arrives, or the member sends one.
  */
 export type Conversation =
@@ -103,9 +102,11 @@ export interface StoreSnapshot {
   /** Why the last send failed, shown as "Not sent: " plus its message; null after a success, a new send, or another conversation or repo. */
   readonly sendError: ErrorInfo | null;
   /**
-   * Throttled per UI contract section 3; never about the member's own messages. Null until the
-   * first one. Open at G1: the contract's burst text names one conversation, and does not say
-   * what a burst spanning several reads.
+   * Throttled per UI contract section 3, at most once per 3 seconds; never about the member's own
+   * messages. Null until the first one. One message reads "{sender}: {first 140 characters}". A
+   * burst reads "{n} new messages in {conversation}" (the conversation's label) when all of it is
+   * in one conversation, and "{n} new messages in {k} conversations" when it spans several, k
+   * being the number of distinct conversations and n the number of messages.
    */
   readonly announcement: Announcement | null;
 }
@@ -145,6 +146,12 @@ export interface Store {
   loadOlder(): Promise<void>;
   /** Moves the selected repo's read pointer forward to the newest message of the selected conversation. Never backward. */
   markRead(): Promise<void>;
+  /**
+   * Fetches the directory again, so a member added, changed or revoked elsewhere (the admin panel)
+   * shows in the To select and @-completion. A failure keeps the old directory, and the promise
+   * still resolves. Does nothing when signed out.
+   */
+  refreshDirectory(): Promise<void>;
   /** Stops streams and timers. The store is not used afterwards. */
   dispose(): void;
 }
