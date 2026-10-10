@@ -36,8 +36,8 @@ Off limits: pushing, touching `main`, `tailscale`, `herdr`, anything outside you
 Generated or discovered by convention: `client/dist/`, `client/test-results/`, `client/playwright-report/`, lockfiles.
 
 ## 5. Commands
-Use absolute paths; the shell's cwd may not be where you think. Your worktree has the repo layout under its own root.
-- Every shell: `export CHATTER_JS=/home/cyanfam/src/chatter/dist/bin/chatter.js`. It is not persisted. Without it the contract tests skip silently, and skipped is not passing.
+Use absolute paths; the shell's cwd may not be where you think. Your worktree has the repo layout under its own root. The worktree isolation guard rejects some compound shell commands (`cd ... &&` chains, heredocs, loops that pipe into other tools), so run plain single commands: `git -C <path>`, `npm --prefix <path>`, and write files with the Write and Edit tools.
+- Shell state does not persist between calls. Put `CHATTER_JS=/home/cyanfam/src/chatter/dist/bin/chatter.js` in front of every command that needs it. Without it the contract tests skip silently, and skipped is not passing.
 - Bridge: `npm test` at the worktree root. Baseline: 30 pass, 0 skipped.
 - Client: scripts in `client/package.json` (`typecheck`, `test`, `build`, `e2e`) once T0 has landed.
 - Node 22.16 (needs 22.5 or later). `node:sqlite` is experimental; keep `--no-warnings`.
