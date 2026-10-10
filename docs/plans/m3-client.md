@@ -40,7 +40,7 @@ W4 is one task because integration needs the behaviour of everything before it. 
 | T1 static + CSP | 0 | Opus | security-sensitive file serving, tests first | `bridge/src/static.js`, hook in `bridge/src/server.js`, `bridge/bin/chatter-bridge.js`, `bridge/test/static.test.js`, `bridge/test/helpers.js`, README configuration table | none |
 | G0 | 0 | me, Codex read-only | independent eyes on file serving and the dependency table | none | T0, T1 |
 | T2 API + state contract | 1 | Opus | contract-heavy, SSE edge cases | `client/src/api/**`, `client/src/state/types.ts`, `client/src/state/fake.ts`, `client/test/fixtures/**` | G0 |
-| T3 design system + shell | 1 | Sonnet | semantic shell driven by the UI contract | `client/src/styles/**`, `client/src/features/shell/**`, `client/src/features/index.ts`, `client/src/app.tsx`, `client/src/main.tsx` | G0 |
+| T3 design system + shell | 1 | Sonnet | semantic shell driven by the UI contract | `client/src/styles/**`, `client/src/features/shell/**`, `client/src/features/index.ts`, `client/src/app.tsx`, `client/src/main.tsx`, `client/test/toolchain.test.tsx` (retarget only) | G0 |
 | T4 E2E harness + blind specs | 1 | Opus, writes none of the UI | independence of the certifier | `client/e2e/**`, `client/playwright.config.ts` | G0 |
 | G1 | 1 | me | contract gate | none | T2, T3, T4 |
 | T5 session + sync | 2 | Opus | sync correctness | `client/src/state/**` except frozen `types.ts`, `fake.ts` | G1 |
@@ -86,7 +86,14 @@ Codex reviewed `616ccb9` read-only and found three Medium issues and one Low cov
 4. **Not patched, by decision.** A malformed, NUL or backslash component that the URL parser removes through a following `..` (for example `/%ZZ/../index.html`, which answers the shell). Dot-segment removal is standard, the dropped component never reaches the file system, and validating the raw request line would add request-target parsing to security-critical code for no security gain. Do not change this; mention in your report if you disagree.
 - Done when, with pasted output: each new test was seen red first; `CHATTER_JS=... npm test` is all green with the old 54 untouched; for each new guard you ran its mutation and report the test that went red: remove the ancestor and dangling-link handling, remove the read limit, remove `strictContentLength`, remove `handle.close()`. Hold only the two paths. Report in 15 lines or fewer.
 
-## Wave 1 briefs (drafted during Wave 0; adjust at G0 if Wave 0 teaches something)
+## Wave 1 briefs (drafted during Wave 0; adjusted after T0 and T1 landed)
+
+Common to T2, T3 and T4, from Wave 0 (T0 at `d7ceb1f`, verified by the coordinator: clean `npm ci`, typecheck, 30 unit tests, build, `check:dist`, and the built page loading in headless Chromium through the bridge's CSP with no violations):
+- Commands are in the executor context: `npm --prefix client ci` first, then `npm --prefix client run typecheck|test|build|check:dist|e2e`. The Playwright config is T0's minimal one; T4 owns and extends it. `npm run e2e` fails while no spec exists, on purpose.
+- `client/src/main.tsx` is a placeholder (`Placeholder`, an `<h1>` in `<main>`). `client/test/toolchain.test.tsx` imports `Placeholder` from it; whoever replaces the placeholder (T3) retargets that test minimally and keeps it green.
+- The bridge serves `client/dist` at `/` through `CHATTER_BRIDGE_STATIC_DIR` (T1); `makeEnv({ staticDir })` in `bridge/test/helpers.js` starts a bridge with it. The client is therefore same-origin in production: relative URLs, no CORS.
+- Client tests are picked up from `client/src/**/*.test.{ts,tsx}` and `client/test/**/*.test.{ts,tsx}`; `e2e/**` is excluded from Vitest.
+- Node needs to be 22.13 or later for the client toolchain.
 
 ### T2 API module and state contract
 Build the typed, tested client-side API layer and the state contract the views build against. No UI.
