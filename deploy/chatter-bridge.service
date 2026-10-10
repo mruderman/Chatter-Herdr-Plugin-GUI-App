@@ -1,0 +1,26 @@
+# systemd user unit for the Chatter bridge.
+#   cp deploy/chatter-bridge.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now chatter-bridge
+# Adjust the three paths marked CHANGE. Hardening lines are conservative and untested on the real host.
+[Unit]
+Description=Chatter bridge (REST and SSE for the Chatter Herdr plugin)
+After=network-online.target
+
+[Service]
+Type=simple
+# CHANGE: where this repo lives
+WorkingDirectory=%h/Chatter-Herdr-Plugin-GUI-App
+# CHANGE: directory holding the `chatter` command and `herdr`
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# CHANGE if the plugin's state is not in Chatter's default location (see `chatter data`)
+#Environment=CHATTER_STATE_DIR=%h/.local/state/herdr/plugins/chatter
+Environment=CHATTER_CMD=chatter
+Environment=CHATTER_BRIDGE_TRUST_TAILSCALE=1
+ExecStart=/usr/bin/node --no-warnings bridge/bin/chatter-bridge.js serve --host 127.0.0.1 --port 8791
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,147 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
+import { makeAuthenticator } from '../src/auth.js';
+import { checkSchema } from '../src/chatter.js';
+import { RateLimiter, checkWrite } from '../src/policy.js';
+import { Store } from '../src/store.js';
+import { mentionsOf, chatterTime } from '../src/util.js';
+
+const member = (o = {}) => ({ handle: 'thom', role: 'member', can_address_agents: true, ...o });
+const admin = member({ handle: 'flan', role: 'admin' });
+const ctx = { agentNames: new Set(['codex', 'pi']), memberHandles: new Set(['flan', 'thom', 'grace']) };
+const refused = (fn, code) => assert.throws(fn, (e) => e.code === code, `expected ${code}`);
+
+test('mentionsOf follows Chatter grammar and finds @everyone case-insensitively', () => {
+  assert.deepEqual(mentionsOf('hi @codex and @Thom, @everyone'), { handles: ['codex', 'thom'], everyone: true });
+  assert.deepEqual(mentionsOf('mail me at a@b.com'), { handles: ['b'], everyone: false }); // same quirk as Chatter
+  assert.deepEqual(mentionsOf('@everyone-ish'), { handles: ['everyone-ish'], everyone: false });
+});
+
+test('chatterTime turns Chatter UTC strings into ISO', () => {
+  assert.equal(chatterTime('2026-10-09 06:00:19'), '2026-10-09T06:00:19Z');
+});
+
+test('policy: @everyone is admin only, in any case', () => {
+  for (const body of ['@everyone stand up', 'ping @Everyone', 'x @EVERYONE y']) {
+    refused(() => checkWrite({ member: member(), to: '#chat', body, ...ctx }), 'everyone_admin_only');
+  }
+  assert.equal(checkWrite({ member: admin, to: '#chat', body: '@everyone hi', ...ctx }).everyone, true);
+});
+
+test('policy: addressing agents follows the member flag; admin always may', () => {
+  const off = member({ can_address_agents: false });
+  refused(() => checkWrite({ member: off, to: '#chat', body: 'hey @codex', ...ctx }), 'agents_not_allowed');
+  refused(() => checkWrite({ member: off, to: 'codex', body: 'hey', ...ctx }), 'agents_not_allowed');
+  assert.deepEqual(checkWrite({ member: member(), to: '#chat', body: 'hey @codex @grace', ...ctx }).agentTargets, ['codex']);
+  assert.deepEqual(checkWrite({ member: member(), to: '#chat', body: 'hey @codex @grace', ...ctx }).memberTargets, ['grace']);
+  assert.equal(checkWrite({ member: { ...admin, can_address_agents: false }, to: 'pi', body: 'x', ...ctx }).toAgent, true);
+  // a member with the flag off may still talk to other members
+  assert.equal(checkWrite({ member: off, to: 'grace', body: 'hello', ...ctx }).toMember, true);
+});
+
+test('policy: DM recipients and body limits', () => {
+  refused(() => checkWrite({ member: member(), to: 'nobody', body: 'x', ...ctx }), 'unknown_recipient');
+  refused(() => checkWrite({ member: member(), to: 'thom', body: 'x', ...ctx }), 'self_dm');
+  refused(() => checkWrite({ member: member(), to: '#chat', body: '   ', ...ctx }), 'empty_body');
+  refused(() => checkWrite({ member: member(), to: '#chat', body: 'a\0b', ...ctx }), 'invalid_body');
+  refused(() => checkWrite({ member: member(), to: '#chat', body: 'x'.repeat(8001), ...ctx }), 'body_too_long');
+  refused(() => checkWrite({ member: member(), to: '#chat', body: 42, ...ctx }), 'bad_request');
+  assert.equal(checkWrite({ member: member(), to: '#chat', body: 'x'.repeat(8000), ...ctx }).mode, 'post');
+  assert.equal(checkWrite({ member: member(), to: '#chat', body: '  padded  ', ...ctx }).body, 'padded');
+});
+
+test('rate limiter refills over time', () => {
+  let t = 0;
+  const rl = new RateLimiter(2, () => t);
+  rl.take('a'); rl.take('a');
+  refused(() => rl.take('a'), 'rate_limited');
+  rl.take('b'); // separate bucket
+  t += 30_000; // half a minute buys one token at 2/min
+  rl.take('a');
+  refused(() => rl.take('a'), 'rate_limited');
+});
+
+test('store: members, tokens, revocation, last-admin protection', () => {
+  const s = new Store(':memory:');
+  s.addMember({ handle: 'flan', kind: 'human', role: 'admin', tailscale_login: 'flan@example.com' });
+  s.addMember({ handle: 'thom', kind: 'computational' });
+  refused(() => s.addMember({ handle: 'thom', kind: 'computational' }), 'handle_taken');
+  refused(() => s.addMember({ handle: 'Bad Name', kind: 'human' }), 'bad_handle');
+  refused(() => s.addMember({ handle: 'everyone', kind: 'human' }), 'bad_handle');
+  refused(() => s.addMember({ handle: 'x', kind: 'robot' }), 'bad_kind');
+  refused(() => s.addMember({ handle: 'y', kind: 'human', tailscale_login: 'flan@example.com' }), 'login_taken');
+
+  const t1 = s.issueToken('thom');
+  assert.match(t1, /^cb_/);
+  assert.equal(s.memberByToken(t1).handle, 'thom');
+  const t2 = s.issueToken('thom'); // rotation kills the old token
+  assert.equal(s.memberByToken(t1), null);
+  assert.equal(s.memberByToken(t2).handle, 'thom');
+  assert.equal(s.db.prepare('SELECT COUNT(*) AS n FROM tokens WHERE token_hash = ?').get(t2).n, 0, 'plaintext token is never stored');
+
+  s.revokeMember('thom');
+  assert.equal(s.memberByToken(t2), null);
+  refused(() => s.issueToken('thom'), 'no_such_member');
+  refused(() => s.revokeMember('flan'), 'last_admin');
+  refused(() => s.updateMember('flan', { role: 'member' }), 'last_admin');
+  assert.equal(s.memberByLogin('flan@example.com').handle, 'flan');
+});
+
+test('store: read pointers only move forward; audit is newest first', () => {
+  const s = new Store(':memory:');
+  assert.equal(s.setRead('thom', 'repo-1', 10), 10);
+  assert.equal(s.setRead('thom', 'repo-1', 4), 10);
+  assert.equal(s.setRead('thom', 'repo-1', 12), 12);
+  assert.equal(s.getRead('thom', 'repo-2'), 0);
+  s.audit({ actor: 'a', action: 'x' });
+  s.audit({ actor: 'a', action: 'y', detail: { n: 1 } });
+  const log = s.listAudit();
+  assert.deepEqual(log.map((e) => e.action), ['y', 'x']);
+  assert.deepEqual(log[0].detail, { n: 1 });
+});
+
+test('authentication: bearer, and Tailscale headers only when trusted and verified', async () => {
+  const s = new Store(':memory:');
+  s.addMember({ handle: 'flan', kind: 'human', role: 'admin', tailscale_login: 'flan@example.com' });
+  s.addMember({ handle: 'grace', kind: 'computational' });
+  const token = s.issueToken('grace');
+  const req = (headers, remote = '127.0.0.1') => ({ headers, socket: { remoteAddress: remote } });
+  const whois = async (ip) => (ip === '100.64.0.7' ? 'flan@example.com' : 'someone@else.com');
+
+  const trusting = makeAuthenticator({ store: s, trustTailscale: true, whois });
+  assert.equal((await trusting(req({ authorization: `Bearer ${token}` }))).handle, 'grace');
+  await assert.rejects(trusting(req({ authorization: 'Bearer cb_nope' })), (e) => e.code === 'bad_token');
+
+  const ts = { 'tailscale-user-login': 'flan@example.com', 'x-forwarded-for': '100.64.0.7' };
+  assert.equal((await trusting(req(ts))).handle, 'flan');
+  // header does not match what whois says about the address
+  await assert.rejects(trusting(req({ ...ts, 'x-forwarded-for': '100.64.0.8' })), (e) => e.code === 'unauthenticated');
+  // header without a forwarded address
+  await assert.rejects(trusting(req({ 'tailscale-user-login': 'flan@example.com' })), (e) => e.code === 'unauthenticated');
+  // header from a non-loopback peer is a forgery
+  await assert.rejects(trusting(req(ts, '203.0.113.9')), (e) => e.code === 'unauthenticated');
+  // verified login that is not a member
+  const stranger = makeAuthenticator({ store: s, trustTailscale: true, whois: async () => 'stranger@example.com' });
+  await assert.rejects(stranger(req({ ...ts, 'tailscale-user-login': 'stranger@example.com' })), (e) => e.code === 'not_registered');
+  // trust switched off
+  const off = makeAuthenticator({ store: s, trustTailscale: false, whois });
+  await assert.rejects(off(req(ts)), (e) => e.code === 'unauthenticated');
+});
+
+test('schema check names drifted columns', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`CREATE TABLE messages (id INTEGER, from_agent TEXT, to_agent TEXT, text TEXT, kind TEXT, ref_id TEXT, created_at TEXT, delivered_at TEXT, read_at TEXT);
+    CREATE TABLE agents (name TEXT, pane_id TEXT, repo_root TEXT, branch TEXT, kind TEXT, role TEXT, registered_at TEXT, last_seen_at TEXT, departed_at TEXT);
+    CREATE TABLE notes (id INTEGER, author TEXT, type TEXT, text TEXT, task_id TEXT, status TEXT, created_at TEXT);
+    CREATE TABLE tasks (id TEXT, title TEXT, status TEXT, assignee TEXT, created_by TEXT, created_at TEXT, updated_at TEXT);`);
+  const problems = checkSchema(db);
+  assert.ok(problems.some((p) => p.includes('messages lacks body')));
+  assert.ok(problems.some((p) => p.includes('table handoffs missing')));
+});
+
+test('the skill ships the same client script as clients/', async () => {
+  const fs = await import('node:fs');
+  const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
+  assert.equal(read('../../skills/chatter-gui/scripts/chatter-member.mjs'), read('../../clients/chatter-member.mjs'));
+});
