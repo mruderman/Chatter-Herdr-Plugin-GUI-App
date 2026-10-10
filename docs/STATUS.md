@@ -1,7 +1,7 @@
-**Updated:** 2026-10-10 · `m3-client` at `2ef5be0` (T0, T1, T1b, T1c, T2, T2b and T4 merged; docs) · `npm test` 63 pass; client typecheck clean, 266 unit tests pass with real Chatter · G0 closed (GO); G1 waits only on T3; running: T3, T1d, T5
+**Updated:** 2026-10-10 · `m3-client` at `aafb18a` (T0, T1, T1b, T1c, T2, T2b, T3 and T4 merged; docs) · `npm test` 63 pass; client typecheck clean, 435 unit tests pass, build and check:dist green, T4's smoke spec and canaries pass against T3's shell · G0 and G1 closed · running: T5, T8b, T1d
 
 ## Where we are
-- Phase: M3 (web client core). Done: T0 `d7ceb1f`, T1 `616ccb9`, T1b `35a7315`, T1c `e46af02`, T2 `ef17d87`, T4 `07fac03`, T2b `06cde31`; G0 closed at GO. Open: G1 (needs T3; the store contract is now settled). Running: T3, T1d, and T5, started early because it depends only on T2 and T2b.
+- Phase: M3 (web client core). Done: T0, T1, T1b, T1c, T2, T2b, T3, T4 (see `git log`); G0 and G1 closed. Wave 2 running: T5 (real store), T8b (composer); T1d (static-server tests) finishing. Queued for free slots: T8a (conversations and feed), then T7 (admin), T6 (board and members), T9 (notifications); T10 (integration and the gate) after them.
 - Branch: `m3-client` (from `main` at `2e09e44`), not pushed. Nothing is pushed without Flan's go-ahead.
 - Agreed 2026-10-09: go; `/brief` and `/role` deferred (Q2); Claude subagents code, Codex reviews read-only; run to the M3 gate; up to 3 executors at once.
 - Wave 1 started before G0 fully closed, on purpose: T1b only hardened edge cases of the static server (symlink escapes, response framing), not the surface Wave 1 consumes (CSP, headers, SPA fallback). G1 cannot close before G0 does.
@@ -13,7 +13,8 @@ All run in the background; each completion notice returns to this session. Workt
 |---|---|---|---|
 | T1d error-injection tests for the absence rule (tests only; Codex round 3 found no defect, but I ran its proposed mutations and four are unguarded: adding EIO, EPERM or EMFILE to `ABSENT`, and the `open` catch refusing unconditionally; brief in the plan) | Sonnet, running | `bridge/test/static.test.js` | rerun the suite, all my mutation sets plus `mutate-round3.sh` (the four must now be caught); commit; cherry-pick; no Codex round (no production change) |
 | T5 session and sync, the real store (brief in the plan; the fake store is the behavioural reference; streams for every non-orphan repo up to 8) | Opus, running (BASE `2ef5be0`) | new files under `client/src/state/` (not `types.ts`, `fake.ts`, `fake.test.ts`) | typecheck, unit and real-bridge integration tests green; read `store.ts` and the conformance suite myself; my own mutation spot-checks; commit; cherry-pick |
-| T3 design system and shell | Sonnet, running (BASE `a2adec9`) | `client/src/styles/**`, `features/shell/**`, `features/index.ts`, `app.tsx`, `main.tsx`, `test/toolchain.test.tsx` (retarget only) | on landing: run its tests, build, check:dist; look at the shell in a real browser (axe per theme); check the contrast assertions against `tokens.css` |
+| T8b composer and mention suggestions (brief in the plan; follows the UI contract section 8) | Opus, running (BASE `aafb18a`) | `client/src/features/chat/composer/**` | tests, build, check:dist, the agent's real-browser axe results; I read the combobox code; mutation spot-checks; commit; cherry-pick |
+| T8a conversations and feed, announcements, `ChatView` (brief in the plan) | Opus, queued: next free slot | `client/src/features/chat/{conversations,feed,announcements}/**`, `ChatView.tsx`, `index.ts` | same |
 
 Leftover finished worktrees (T0 and T1) stay until the milestone ends; their commits are already cherry-picked.
 
@@ -25,6 +26,13 @@ Leftover finished worktrees (T0 and T1) stay until the milestone ends; their com
 - Only the "drop the CSP" mutation can turn a spec red today. "Break `canSee`" and "drop the `@everyone` rule" cannot show anything until the real UI exists, because those specs fail at sign-in now. Do not read "still red" as "caught" at G1; run the three mutations at T10 against the integrated UI and require each to flip its named spec.
 - T4's specs use tolerant selectors where the contract was ambiguous; the rulings are now in `docs/ui-contract.md` section 8, so T10 may tighten them. E2E does not cover announcements, the "New messages" marker, day separators, "Load older messages", Board and Members contents, or 200% text; unit tests with the fake store carry those. Add E2E for any of them if time allows (day separators need rows with older timestamps, which only a direct write to the scratch Chatter database can seed; `seedAgent` in the test helpers already sets that precedent).
 - T4's specs read Chatter's table directly (`countChatterRows`); the harness world is: admin `flan`, humans `hana` and `ivo`, computational `kai`, agent `codex`, repos "main" and "sidecar".
+
+## Carried from T3 to T10 (integration)
+- T3's shell takes `ShellSession`, `RepoOption` and `ShellMember` props; T10 maps the store onto them, passes T9's `notifications` prop, and supplies the real views through the registry (T3's `features/index.ts`).
+- `app.tsx` known limitation: on a re-sign-in in the same page the previously open view mounts for one commit before the reset to Chat; once T6/T7 fetch on mount that would fire one wasted request. Fix at T10: hold the view choice with a per-sign-in counter so the reset happens during render.
+- T4's `a11y.spec.ts` asserts `data-theme` is set under media emulation, but the ruling (UI contract section 8, T3 implemented it) is that System mode sets no attribute. Change the soft assertion to read a computed style per theme, or run the dark and high-contrast scans through Settings so the attribute is set. T4 emulates high contrast with `contrast: more`, which axe can evaluate; forced-colors contrast stays unverified.
+- Unverified by T3 and still open: real screen readers (Orca, M6), Firefox and Safari behaviour, any flash of a stored theme before the app runs.
+- Vite 8's Lightning CSS adds `--lightningcss-*` custom properties and shortens `#000000` to `#000`; an E2E that reads a token value must normalise.
 
 ## Open warnings
 - Codex: ping and one real review work under `--sandbox read-only`; round 1 found 3 Medium plus 1 Low, all reproduced. Round 2 is the next use. Fallback is a fresh Opus subagent and Flan is told.
