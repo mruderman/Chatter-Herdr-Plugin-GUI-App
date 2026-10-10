@@ -1,0 +1,2463 @@
+{
+  "bridge_version": "0.1.0",
+  "chatter_version": "0.19.0",
+  "exchanges": {
+    "members-add-computational": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/members",
+        "as": "flan",
+        "body": {
+          "handle": "thom",
+          "kind": "computational",
+          "display_name": "Thom"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "member": {
+          "handle": "thom",
+          "display_name": "Thom",
+          "kind": "computational",
+          "role": "member",
+          "can_address_agents": true,
+          "tailscale_login": null,
+          "status": "active",
+          "created_at": "2026-10-10T14:06:55.677Z",
+          "last_seen_at": null
+        },
+        "token": "redacted-token"
+      }
+    },
+    "members-add-human-with-token": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/members",
+        "as": "flan",
+        "body": {
+          "handle": "mira",
+          "kind": "human",
+          "display_name": "Mira",
+          "tailscale_login": "mira@example.com",
+          "issue_token": true
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "member": {
+          "handle": "mira",
+          "display_name": "Mira",
+          "kind": "human",
+          "role": "member",
+          "can_address_agents": true,
+          "tailscale_login": "mira@example.com",
+          "status": "active",
+          "created_at": "2026-10-10T14:06:55.687Z",
+          "last_seen_at": null
+        },
+        "token": "redacted-token"
+      }
+    },
+    "members-add-human": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/members",
+        "as": "flan",
+        "body": {
+          "handle": "ezra",
+          "kind": "human",
+          "display_name": "Ezra"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "member": {
+          "handle": "ezra",
+          "display_name": "Ezra",
+          "kind": "human",
+          "role": "member",
+          "can_address_agents": true,
+          "tailscale_login": null,
+          "status": "active",
+          "created_at": "2026-10-10T14:06:55.692Z",
+          "last_seen_at": null
+        },
+        "token": null
+      }
+    },
+    "members-add-restricted": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/members",
+        "as": "flan",
+        "body": {
+          "handle": "kieran",
+          "kind": "computational",
+          "display_name": "Kieran",
+          "can_address_agents": false
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "member": {
+          "handle": "kieran",
+          "display_name": "Kieran",
+          "kind": "computational",
+          "role": "member",
+          "can_address_agents": false,
+          "tailscale_login": null,
+          "status": "active",
+          "created_at": "2026-10-10T14:06:55.696Z",
+          "last_seen_at": null
+        },
+        "token": "redacted-token"
+      }
+    },
+    "healthz": {
+      "request": {
+        "method": "GET",
+        "path": "/healthz",
+        "as": null
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "ok": true,
+        "version": "0.1.0",
+        "repos": 1
+      }
+    },
+    "me-admin": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/me",
+        "as": "flan"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "handle": "flan",
+        "display_name": "flan",
+        "kind": "human",
+        "role": "admin",
+        "can_address_agents": true
+      }
+    },
+    "me-computational": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/me",
+        "as": "thom"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "handle": "thom",
+        "display_name": "Thom",
+        "kind": "computational",
+        "role": "member",
+        "can_address_agents": true
+      }
+    },
+    "me-human": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/me",
+        "as": "mira"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "handle": "mira",
+        "display_name": "Mira",
+        "kind": "human",
+        "role": "member",
+        "can_address_agents": true
+      }
+    },
+    "me-restricted": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/me",
+        "as": "kieran"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "handle": "kieran",
+        "display_name": "Kieran",
+        "kind": "computational",
+        "role": "member",
+        "can_address_agents": false
+      }
+    },
+    "me-unauthenticated": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/me",
+        "as": null
+      },
+      "status": 401,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "unauthenticated",
+          "message": "send a bearer token, or connect through the tailnet as a registered member"
+        }
+      }
+    },
+    "me-bad-token": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/me",
+        "as": "invalid token"
+      },
+      "status": 401,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "bad_token",
+          "message": "token is invalid or revoked"
+        }
+      }
+    },
+    "post-chat": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "#chat",
+          "body": "hello from thom"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 2,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [],
+        "delivery": null
+      }
+    },
+    "post-mention-member": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "mira",
+        "body": {
+          "to": "#chat",
+          "body": "morning all, @thom can you check the deploy notes?"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 3,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [
+          "thom"
+        ],
+        "delivery": null
+      }
+    },
+    "post-dm-member": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "mira",
+          "body": "sure, sending the details privately"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 4,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [
+          "mira"
+        ],
+        "delivery": null
+      }
+    },
+    "post-dm-reply": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "mira",
+        "body": {
+          "to": "thom",
+          "body": "thanks!"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 5,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [
+          "thom"
+        ],
+        "delivery": null
+      }
+    },
+    "post-dm-other": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "grace",
+          "body": "grace, can you review TASK-1 today?"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 6,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [
+          "grace"
+        ],
+        "delivery": null
+      }
+    },
+    "post-everyone-admin": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "flan",
+        "body": {
+          "to": "#chat",
+          "body": "@everyone standup in five"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 7,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [],
+        "delivery": null
+      }
+    },
+    "post-dm-agent": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "codex",
+          "body": "please run the test suite"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 8,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [],
+        "delivery": "queued"
+      }
+    },
+    "post-mention-agent": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "grace",
+        "body": {
+          "to": "#chat",
+          "body": "@codex can you summarise the open questions?"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 9,
+        "pushed": [
+          "codex (queued)"
+        ],
+        "warnings": [],
+        "mentioned_members": [],
+        "delivery": null
+      }
+    },
+    "post-unknown-mention": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "#chat",
+          "body": "ping @ghost"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 11,
+        "pushed": [],
+        "warnings": [
+          "mention @ghost matches no agent in this repo — not pushed"
+        ],
+        "mentioned_members": [],
+        "delivery": null
+      }
+    },
+    "post-unicode": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "flan",
+        "body": {
+          "to": "#chat",
+          "body": "ünïcödé — 𝄞 multi-byte check"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 12,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [],
+        "delivery": null
+      }
+    },
+    "post-html": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "grace",
+        "body": {
+          "to": "#chat",
+          "body": "<b>not bold</b> <script>alert(1)</script> https://example.com/x?y=1&z=2"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 13,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [],
+        "delivery": null
+      }
+    },
+    "post-multiline": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "mira",
+        "body": {
+          "to": "#chat",
+          "body": "line one\nline two\n  indented"
+        }
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "id": 14,
+        "pushed": [],
+        "warnings": [],
+        "mentioned_members": [],
+        "delivery": null
+      }
+    },
+    "members-rotate-token": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/members/mira/token",
+        "as": "flan"
+      },
+      "status": 201,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "token": "redacted-token"
+      }
+    },
+    "stream-live": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/stream",
+        "as": "mira"
+      },
+      "status": 200,
+      "content_type": "text/event-stream; charset=utf-8",
+      "file": "sse/live.sse"
+    },
+    "post-everyone-member": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "#chat",
+          "body": "@everyone wake up"
+        }
+      },
+      "status": 403,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "everyone_admin_only",
+          "message": "@everyone is reserved for the admin; nothing was posted"
+        }
+      }
+    },
+    "post-agents-not-allowed": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "kieran",
+        "body": {
+          "to": "#chat",
+          "body": "@codex hello"
+        }
+      },
+      "status": 403,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "agents_not_allowed",
+          "message": "you may not address Herdr agents; nothing was posted"
+        }
+      }
+    },
+    "post-dm-agent-not-allowed": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "kieran",
+        "body": {
+          "to": "codex",
+          "body": "hello"
+        }
+      },
+      "status": 403,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "agents_not_allowed",
+          "message": "you may not message Herdr agents"
+        }
+      }
+    },
+    "post-empty": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "#chat",
+          "body": "   "
+        }
+      },
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "empty_body",
+          "message": "message is empty"
+        }
+      }
+    },
+    "post-self-dm": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "thom",
+          "body": "note to self"
+        }
+      },
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "self_dm",
+          "message": "cannot message yourself"
+        }
+      }
+    },
+    "post-unknown-recipient": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "nobody",
+          "body": "hello?"
+        }
+      },
+      "status": 404,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "unknown_recipient",
+          "message": "no agent or member named \"nobody\""
+        }
+      }
+    },
+    "post-too-long": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "to": "#chat",
+          "body": "<8001 characters>"
+        }
+      },
+      "status": 413,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "body_too_long",
+          "message": "message is longer than 8000 characters"
+        }
+      }
+    },
+    "post-missing-to": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "body": {
+          "body": "no recipient"
+        }
+      },
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "bad_request",
+          "message": "\"to\" must be \"#chat\" or a handle"
+        }
+      }
+    },
+    "post-bad-json": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom",
+        "raw_body": "{\"to\":"
+      },
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "bad_json",
+          "message": "body is not valid JSON"
+        }
+      }
+    },
+    "board": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/board",
+        "as": "thom"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "repo-c522d9cf",
+        "epoch": "1707570-1791641215602",
+        "agents": [
+          {
+            "name": "codex",
+            "pane_id": null,
+            "workspace_id": null,
+            "cwd": null,
+            "repo_root": "<scratch>/repo",
+            "branch": null,
+            "kind": "codex",
+            "role": null,
+            "registered_at": "2026-10-09 00:00:00",
+            "last_seen_at": "2026-10-09 00:00:00",
+            "departed_at": null,
+            "status": "offline",
+            "task": {
+              "assignee": "codex",
+              "id": "TASK-1",
+              "title": "Wire the web client"
+            }
+          }
+        ],
+        "agents_error": null,
+        "tasks": [
+          {
+            "id": "TASK-1",
+            "title": "Wire the web client",
+            "status": "in_progress",
+            "assignee": "codex",
+            "created_by": "flan",
+            "created_at": "2026-10-10T14:06:56Z",
+            "updated_at": "2026-10-10T14:06:56Z"
+          }
+        ],
+        "notes": [
+          {
+            "id": 3,
+            "author": "flan",
+            "type": "note",
+            "text": "handed off TASK-1 to codex: API module ready for review",
+            "task_id": "TASK-1",
+            "created_at": "2026-10-10T14:06:56Z"
+          },
+          {
+            "id": 1,
+            "author": "flan",
+            "type": "decision",
+            "text": "The bridge reads Chatter state read-only",
+            "task_id": null,
+            "created_at": "2026-10-10T14:06:56Z"
+          }
+        ],
+        "questions": [
+          {
+            "id": 2,
+            "author": "flan",
+            "type": "question",
+            "text": "who owns the auth migration?",
+            "task_id": null,
+            "created_at": "2026-10-10T14:06:56Z"
+          }
+        ],
+        "handoffs": [
+          {
+            "id": 1,
+            "task_id": "TASK-1",
+            "from": "flan",
+            "to": "codex",
+            "summary": "API module ready for review",
+            "branch": "m3-client",
+            "status": "pending",
+            "created_at": "2026-10-10T14:06:56Z"
+          }
+        ]
+      }
+    },
+    "read": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/read",
+        "as": "mira",
+        "body": {
+          "up_to_id": 5
+        }
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "last_read_id": 5
+      }
+    },
+    "read-backward": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/read",
+        "as": "mira",
+        "body": {
+          "up_to_id": 1
+        }
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "last_read_id": 5
+      }
+    },
+    "read-missing": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-c522d9cf/read",
+        "as": "mira",
+        "body": {}
+      },
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "bad_request",
+          "message": "up_to_id is required"
+        }
+      }
+    },
+    "messages-flan": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "flan"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "repo-c522d9cf",
+        "epoch": "1707570-1791641215602",
+        "messages": [
+          {
+            "id": 1,
+            "from": "flan",
+            "to": "#chat",
+            "body": "setup message",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 2,
+            "from": "thom",
+            "to": "#chat",
+            "body": "hello from thom",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 3,
+            "from": "mira",
+            "to": "#chat",
+            "body": "morning all, @thom can you check the deploy notes?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [
+              "thom"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 4,
+            "from": "thom",
+            "to": "mira",
+            "body": "sure, sending the details privately",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 5,
+            "from": "mira",
+            "to": "thom",
+            "body": "thanks!",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 6,
+            "from": "thom",
+            "to": "grace",
+            "body": "grace, can you review TASK-1 today?",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 7,
+            "from": "flan",
+            "to": "#chat",
+            "body": "@everyone standup in five",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": true
+          },
+          {
+            "id": 8,
+            "from": "thom",
+            "to": "codex",
+            "body": "please run the test suite",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 9,
+            "from": "grace",
+            "to": "#chat",
+            "body": "@codex can you summarise the open questions?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "codex"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 11,
+            "from": "thom",
+            "to": "#chat",
+            "body": "ping @ghost",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "ghost"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 12,
+            "from": "flan",
+            "to": "#chat",
+            "body": "ünïcödé — 𝄞 multi-byte check",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 13,
+            "from": "grace",
+            "to": "#chat",
+            "body": "<b>not bold</b> <script>alert(1)</script> https://example.com/x?y=1&z=2",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 14,
+            "from": "mira",
+            "to": "#chat",
+            "body": "line one\nline two\n  indented",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 15,
+            "from": "flan",
+            "to": "codex",
+            "body": "you were assigned TASK-1: Wire the web client (details: chatter task list)",
+            "kind": "system",
+            "ref_id": "TASK-1",
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 16,
+            "from": "flan",
+            "to": "codex",
+            "body": "TASK-1 API module ready for review | branch m3-client | full details: chatter handoff show 1",
+            "kind": "handoff",
+            "ref_id": "h1",
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          }
+        ],
+        "has_more": false,
+        "max_id": 16
+      }
+    },
+    "messages-thom": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "thom"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "repo-c522d9cf",
+        "epoch": "1707570-1791641215602",
+        "messages": [
+          {
+            "id": 1,
+            "from": "flan",
+            "to": "#chat",
+            "body": "setup message",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 2,
+            "from": "thom",
+            "to": "#chat",
+            "body": "hello from thom",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 3,
+            "from": "mira",
+            "to": "#chat",
+            "body": "morning all, @thom can you check the deploy notes?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [
+              "thom"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 4,
+            "from": "thom",
+            "to": "mira",
+            "body": "sure, sending the details privately",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 5,
+            "from": "mira",
+            "to": "thom",
+            "body": "thanks!",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 6,
+            "from": "thom",
+            "to": "grace",
+            "body": "grace, can you review TASK-1 today?",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 7,
+            "from": "flan",
+            "to": "#chat",
+            "body": "@everyone standup in five",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": true
+          },
+          {
+            "id": 8,
+            "from": "thom",
+            "to": "codex",
+            "body": "please run the test suite",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 9,
+            "from": "grace",
+            "to": "#chat",
+            "body": "@codex can you summarise the open questions?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "codex"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 11,
+            "from": "thom",
+            "to": "#chat",
+            "body": "ping @ghost",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "ghost"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 12,
+            "from": "flan",
+            "to": "#chat",
+            "body": "ünïcödé — 𝄞 multi-byte check",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 13,
+            "from": "grace",
+            "to": "#chat",
+            "body": "<b>not bold</b> <script>alert(1)</script> https://example.com/x?y=1&z=2",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 14,
+            "from": "mira",
+            "to": "#chat",
+            "body": "line one\nline two\n  indented",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          }
+        ],
+        "has_more": false,
+        "max_id": 16
+      }
+    },
+    "messages-mira": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "mira"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "repo-c522d9cf",
+        "epoch": "1707570-1791641215602",
+        "messages": [
+          {
+            "id": 1,
+            "from": "flan",
+            "to": "#chat",
+            "body": "setup message",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 2,
+            "from": "thom",
+            "to": "#chat",
+            "body": "hello from thom",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 3,
+            "from": "mira",
+            "to": "#chat",
+            "body": "morning all, @thom can you check the deploy notes?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [
+              "thom"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 4,
+            "from": "thom",
+            "to": "mira",
+            "body": "sure, sending the details privately",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 5,
+            "from": "mira",
+            "to": "thom",
+            "body": "thanks!",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 7,
+            "from": "flan",
+            "to": "#chat",
+            "body": "@everyone standup in five",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": true
+          },
+          {
+            "id": 9,
+            "from": "grace",
+            "to": "#chat",
+            "body": "@codex can you summarise the open questions?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "codex"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 11,
+            "from": "thom",
+            "to": "#chat",
+            "body": "ping @ghost",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "ghost"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 12,
+            "from": "flan",
+            "to": "#chat",
+            "body": "ünïcödé — 𝄞 multi-byte check",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 13,
+            "from": "grace",
+            "to": "#chat",
+            "body": "<b>not bold</b> <script>alert(1)</script> https://example.com/x?y=1&z=2",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 14,
+            "from": "mira",
+            "to": "#chat",
+            "body": "line one\nline two\n  indented",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          }
+        ],
+        "has_more": false,
+        "max_id": 16
+      }
+    },
+    "messages-grace": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "grace"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "repo-c522d9cf",
+        "epoch": "1707570-1791641215602",
+        "messages": [
+          {
+            "id": 1,
+            "from": "flan",
+            "to": "#chat",
+            "body": "setup message",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 2,
+            "from": "thom",
+            "to": "#chat",
+            "body": "hello from thom",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 3,
+            "from": "mira",
+            "to": "#chat",
+            "body": "morning all, @thom can you check the deploy notes?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [
+              "thom"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 6,
+            "from": "thom",
+            "to": "grace",
+            "body": "grace, can you review TASK-1 today?",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 7,
+            "from": "flan",
+            "to": "#chat",
+            "body": "@everyone standup in five",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": true
+          },
+          {
+            "id": 9,
+            "from": "grace",
+            "to": "#chat",
+            "body": "@codex can you summarise the open questions?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "codex"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 11,
+            "from": "thom",
+            "to": "#chat",
+            "body": "ping @ghost",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "ghost"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 12,
+            "from": "flan",
+            "to": "#chat",
+            "body": "ünïcödé — 𝄞 multi-byte check",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 13,
+            "from": "grace",
+            "to": "#chat",
+            "body": "<b>not bold</b> <script>alert(1)</script> https://example.com/x?y=1&z=2",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 14,
+            "from": "mira",
+            "to": "#chat",
+            "body": "line one\nline two\n  indented",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          }
+        ],
+        "has_more": false,
+        "max_id": 16
+      }
+    },
+    "messages-kieran": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/messages",
+        "as": "kieran"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "repo-c522d9cf",
+        "epoch": "1707570-1791641215602",
+        "messages": [
+          {
+            "id": 1,
+            "from": "flan",
+            "to": "#chat",
+            "body": "setup message",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 2,
+            "from": "thom",
+            "to": "#chat",
+            "body": "hello from thom",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 3,
+            "from": "mira",
+            "to": "#chat",
+            "body": "morning all, @thom can you check the deploy notes?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [
+              "thom"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 7,
+            "from": "flan",
+            "to": "#chat",
+            "body": "@everyone standup in five",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": true
+          },
+          {
+            "id": 9,
+            "from": "grace",
+            "to": "#chat",
+            "body": "@codex can you summarise the open questions?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "codex"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 11,
+            "from": "thom",
+            "to": "#chat",
+            "body": "ping @ghost",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "ghost"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 12,
+            "from": "flan",
+            "to": "#chat",
+            "body": "ünïcödé — 𝄞 multi-byte check",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 13,
+            "from": "grace",
+            "to": "#chat",
+            "body": "<b>not bold</b> <script>alert(1)</script> https://example.com/x?y=1&z=2",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 14,
+            "from": "mira",
+            "to": "#chat",
+            "body": "line one\nline two\n  indented",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          }
+        ],
+        "has_more": false,
+        "max_id": 16
+      }
+    },
+    "messages-limit": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/messages?limit=3",
+        "as": "flan"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "repo-c522d9cf",
+        "epoch": "1707570-1791641215602",
+        "messages": [
+          {
+            "id": 14,
+            "from": "mira",
+            "to": "#chat",
+            "body": "line one\nline two\n  indented",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 15,
+            "from": "flan",
+            "to": "codex",
+            "body": "you were assigned TASK-1: Wire the web client (details: chatter task list)",
+            "kind": "system",
+            "ref_id": "TASK-1",
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 16,
+            "from": "flan",
+            "to": "codex",
+            "body": "TASK-1 API module ready for review | branch m3-client | full details: chatter handoff show 1",
+            "kind": "handoff",
+            "ref_id": "h1",
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          }
+        ],
+        "has_more": true,
+        "max_id": 16
+      }
+    },
+    "messages-before": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/messages?before_id=14&limit=3",
+        "as": "flan"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "repo-c522d9cf",
+        "epoch": "1707570-1791641215602",
+        "messages": [
+          {
+            "id": 11,
+            "from": "thom",
+            "to": "#chat",
+            "body": "ping @ghost",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [
+              "ghost"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 12,
+            "from": "flan",
+            "to": "#chat",
+            "body": "ünïcödé — 𝄞 multi-byte check",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 13,
+            "from": "grace",
+            "to": "#chat",
+            "body": "<b>not bold</b> <script>alert(1)</script> https://example.com/x?y=1&z=2",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:56Z",
+            "mentions": [],
+            "everyone": false
+          }
+        ],
+        "has_more": true,
+        "max_id": 16
+      }
+    },
+    "messages-after": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/messages?after_id=0&limit=4",
+        "as": "flan"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "repo-c522d9cf",
+        "epoch": "1707570-1791641215602",
+        "messages": [
+          {
+            "id": 1,
+            "from": "flan",
+            "to": "#chat",
+            "body": "setup message",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 2,
+            "from": "thom",
+            "to": "#chat",
+            "body": "hello from thom",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          },
+          {
+            "id": 3,
+            "from": "mira",
+            "to": "#chat",
+            "body": "morning all, @thom can you check the deploy notes?",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [
+              "thom"
+            ],
+            "everyone": false
+          },
+          {
+            "id": 4,
+            "from": "thom",
+            "to": "mira",
+            "body": "sure, sending the details privately",
+            "kind": "chat",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          }
+        ],
+        "has_more": true,
+        "max_id": 16
+      }
+    },
+    "messages-site": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/site-24538864/messages",
+        "as": "thom"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repo": "site-24538864",
+        "epoch": "1707627-1791641215759",
+        "messages": [
+          {
+            "id": 1,
+            "from": "flan",
+            "to": "#chat",
+            "body": "site repo kickoff",
+            "kind": "post",
+            "ref_id": null,
+            "created_at": "2026-10-10T14:06:55Z",
+            "mentions": [],
+            "everyone": false
+          }
+        ],
+        "has_more": false,
+        "max_id": 1
+      }
+    },
+    "messages-bad-after": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/messages?after_id=abc",
+        "as": "thom"
+      },
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "bad_request",
+          "message": "after_id must be a non-negative integer"
+        }
+      }
+    },
+    "messages-no-such-repo": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/nowhere-00000000/messages",
+        "as": "thom"
+      },
+      "status": 404,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "no_such_repo",
+          "message": "no repo \"nowhere-00000000\""
+        }
+      }
+    },
+    "messages-bad-repo": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/bad%20key/messages",
+        "as": "thom"
+      },
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "bad_repo",
+          "message": "invalid repo key"
+        }
+      }
+    },
+    "repos-admin": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos",
+        "as": "flan"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repos": [
+          {
+            "key": "repo-c522d9cf",
+            "label": "repo",
+            "repo_root": "<scratch>/repo",
+            "orphan": false,
+            "messages": 16,
+            "last_activity": "2026-10-10T14:06:56Z",
+            "epoch": "1707570-1791641215602",
+            "last_read_id": 0
+          },
+          {
+            "key": "site-24538864",
+            "label": "site",
+            "repo_root": "<scratch>/site",
+            "orphan": false,
+            "messages": 1,
+            "last_activity": "2026-10-10T14:06:55Z",
+            "epoch": "1707627-1791641215759",
+            "last_read_id": 0
+          }
+        ]
+      }
+    },
+    "repos-member": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos",
+        "as": "thom"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repos": [
+          {
+            "key": "repo-c522d9cf",
+            "label": "repo",
+            "repo_root": null,
+            "orphan": false,
+            "messages": 16,
+            "last_activity": "2026-10-10T14:06:56Z",
+            "epoch": "1707570-1791641215602",
+            "last_read_id": 0
+          },
+          {
+            "key": "site-24538864",
+            "label": "site",
+            "repo_root": null,
+            "orphan": false,
+            "messages": 1,
+            "last_activity": "2026-10-10T14:06:55Z",
+            "epoch": "1707627-1791641215759",
+            "last_read_id": 0
+          }
+        ]
+      }
+    },
+    "repos-after-read": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos",
+        "as": "mira"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "repos": [
+          {
+            "key": "repo-c522d9cf",
+            "label": "repo",
+            "repo_root": null,
+            "orphan": false,
+            "messages": 16,
+            "last_activity": "2026-10-10T14:06:56Z",
+            "epoch": "1707570-1791641215602",
+            "last_read_id": 5
+          },
+          {
+            "key": "site-24538864",
+            "label": "site",
+            "repo_root": null,
+            "orphan": false,
+            "messages": 1,
+            "last_activity": "2026-10-10T14:06:55Z",
+            "epoch": "1707627-1791641215759",
+            "last_read_id": 0
+          }
+        ]
+      }
+    },
+    "directory": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/directory",
+        "as": "kieran"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "members": [
+          {
+            "handle": "flan",
+            "display_name": "flan",
+            "kind": "human"
+          },
+          {
+            "handle": "thom",
+            "display_name": "Thom",
+            "kind": "computational"
+          },
+          {
+            "handle": "mira",
+            "display_name": "Mira",
+            "kind": "human"
+          },
+          {
+            "handle": "ezra",
+            "display_name": "Ezra",
+            "kind": "human"
+          },
+          {
+            "handle": "kieran",
+            "display_name": "Kieran",
+            "kind": "computational"
+          },
+          {
+            "handle": "grace",
+            "display_name": "Grace",
+            "kind": "computational"
+          },
+          {
+            "handle": "temp",
+            "display_name": "Temporary",
+            "kind": "computational"
+          }
+        ],
+        "agents": [
+          "codex"
+        ]
+      }
+    },
+    "stream-resume": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/stream",
+        "as": "mira",
+        "headers": {
+          "Last-Event-ID": "2"
+        }
+      },
+      "status": 200,
+      "content_type": "text/event-stream; charset=utf-8",
+      "file": "sse/resume.sse"
+    },
+    "stream-unauthenticated": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/stream",
+        "as": null
+      },
+      "status": 401,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "unauthenticated",
+          "message": "send a bearer token, or connect through the tailnet as a registered member"
+        }
+      }
+    },
+    "stream-bad-last-event-id": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/stream",
+        "as": "thom",
+        "headers": {
+          "Last-Event-ID": "abc"
+        }
+      },
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "bad_request",
+          "message": "Last-Event-ID must be a non-negative integer"
+        }
+      }
+    },
+    "stream-no-such-repo": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/nowhere-00000000/stream",
+        "as": "thom"
+      },
+      "status": 404,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "no_such_repo",
+          "message": "no repo \"nowhere-00000000\""
+        }
+      }
+    },
+    "members-list": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/members",
+        "as": "flan"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "members": [
+          {
+            "handle": "flan",
+            "display_name": "flan",
+            "kind": "human",
+            "role": "admin",
+            "can_address_agents": true,
+            "tailscale_login": "flan@example.com",
+            "status": "active",
+            "created_at": "2026-10-10T14:06:55.566Z",
+            "last_seen_at": "2026-10-10T14:06:55.674Z"
+          },
+          {
+            "handle": "thom",
+            "display_name": "Thom",
+            "kind": "computational",
+            "role": "member",
+            "can_address_agents": true,
+            "tailscale_login": null,
+            "status": "active",
+            "created_at": "2026-10-10T14:06:55.677Z",
+            "last_seen_at": "2026-10-10T14:06:55.711Z"
+          },
+          {
+            "handle": "mira",
+            "display_name": "Mira",
+            "kind": "human",
+            "role": "member",
+            "can_address_agents": true,
+            "tailscale_login": "mira@example.com",
+            "status": "active",
+            "created_at": "2026-10-10T14:06:55.687Z",
+            "last_seen_at": "2026-10-10T14:06:55.715Z"
+          },
+          {
+            "handle": "ezra",
+            "display_name": "Ezra",
+            "kind": "human",
+            "role": "member",
+            "can_address_agents": true,
+            "tailscale_login": null,
+            "status": "active",
+            "created_at": "2026-10-10T14:06:55.692Z",
+            "last_seen_at": null
+          },
+          {
+            "handle": "kieran",
+            "display_name": "Kieran",
+            "kind": "computational",
+            "role": "member",
+            "can_address_agents": false,
+            "tailscale_login": null,
+            "status": "active",
+            "created_at": "2026-10-10T14:06:55.696Z",
+            "last_seen_at": "2026-10-10T14:06:55.719Z"
+          },
+          {
+            "handle": "grace",
+            "display_name": "Grace",
+            "kind": "computational",
+            "role": "member",
+            "can_address_agents": true,
+            "tailscale_login": null,
+            "status": "active",
+            "created_at": "2026-10-10T14:06:55.700Z",
+            "last_seen_at": "2026-10-10T14:06:56.147Z"
+          },
+          {
+            "handle": "temp",
+            "display_name": "Temporary",
+            "kind": "computational",
+            "role": "member",
+            "can_address_agents": true,
+            "tailscale_login": null,
+            "status": "active",
+            "created_at": "2026-10-10T14:06:55.704Z",
+            "last_seen_at": null
+          }
+        ]
+      }
+    },
+    "members-update": {
+      "request": {
+        "method": "PATCH",
+        "path": "/v1/members/ezra",
+        "as": "flan",
+        "body": {
+          "display_name": "Ezra R."
+        }
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "member": {
+          "handle": "ezra",
+          "display_name": "Ezra R.",
+          "kind": "human",
+          "role": "member",
+          "can_address_agents": true,
+          "tailscale_login": null,
+          "status": "active",
+          "created_at": "2026-10-10T14:06:55.692Z",
+          "last_seen_at": null
+        }
+      }
+    },
+    "members-update-missing": {
+      "request": {
+        "method": "PATCH",
+        "path": "/v1/members/nobody",
+        "as": "flan",
+        "body": {
+          "display_name": "x"
+        }
+      },
+      "status": 404,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "no_such_member",
+          "message": "no member \"nobody\""
+        }
+      }
+    },
+    "members-add-taken": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/members",
+        "as": "flan",
+        "body": {
+          "handle": "thom",
+          "kind": "computational"
+        }
+      },
+      "status": 409,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "handle_taken",
+          "message": "member \"thom\" already exists"
+        }
+      }
+    },
+    "members-add-agent-name": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/members",
+        "as": "flan",
+        "body": {
+          "handle": "codex",
+          "kind": "computational"
+        }
+      },
+      "status": 409,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "handle_is_agent",
+          "message": "\"codex\" is already a Herdr agent name"
+        }
+      }
+    },
+    "members-add-bad-handle": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/members",
+        "as": "flan",
+        "body": {
+          "handle": "Bad Handle",
+          "kind": "human"
+        }
+      },
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "bad_handle",
+          "message": "handle must be 1-32 chars of a-z, 0-9, _ or -, starting with a letter or digit"
+        }
+      }
+    },
+    "members-forbidden": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/members",
+        "as": "thom"
+      },
+      "status": 403,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "admin_only",
+          "message": "admin only"
+        }
+      }
+    },
+    "members-revoke": {
+      "request": {
+        "method": "DELETE",
+        "path": "/v1/members/temp",
+        "as": "flan"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "member": {
+          "handle": "temp",
+          "display_name": "Temporary",
+          "kind": "computational",
+          "role": "member",
+          "can_address_agents": true,
+          "tailscale_login": null,
+          "status": "revoked",
+          "created_at": "2026-10-10T14:06:55.704Z",
+          "last_seen_at": "2026-10-10T14:06:57.091Z"
+        }
+      }
+    },
+    "stream-revoked": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/stream",
+        "as": "temp"
+      },
+      "status": 200,
+      "content_type": "text/event-stream; charset=utf-8",
+      "file": "sse/revoked.sse"
+    },
+    "me-revoked": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/me",
+        "as": "temp"
+      },
+      "status": 401,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "bad_token",
+          "message": "token is invalid or revoked"
+        }
+      }
+    },
+    "audit": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/audit",
+        "as": "flan"
+      },
+      "status": 200,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "entries": [
+          {
+            "id": 12,
+            "at": "2026-10-10T14:06:57.115Z",
+            "actor": "flan",
+            "action": "member_revoke",
+            "target": "temp",
+            "repo": null,
+            "message_id": null,
+            "detail": null
+          },
+          {
+            "id": 11,
+            "at": "2026-10-10T14:06:57.085Z",
+            "actor": "flan",
+            "action": "member_update",
+            "target": "ezra",
+            "repo": null,
+            "message_id": null,
+            "detail": {
+              "display_name": "Ezra R."
+            }
+          },
+          {
+            "id": 10,
+            "at": "2026-10-10T14:06:56.736Z",
+            "actor": "flan",
+            "action": "token_rotate",
+            "target": "mira",
+            "repo": null,
+            "message_id": null,
+            "detail": null
+          },
+          {
+            "id": 9,
+            "at": "2026-10-10T14:06:56.192Z",
+            "actor": "grace",
+            "action": "push_agent",
+            "target": "codex",
+            "repo": "repo-c522d9cf",
+            "message_id": 9,
+            "detail": null
+          },
+          {
+            "id": 8,
+            "at": "2026-10-10T14:06:56.145Z",
+            "actor": "thom",
+            "action": "dm_agent",
+            "target": "codex",
+            "repo": "repo-c522d9cf",
+            "message_id": 8,
+            "detail": {
+              "delivery": "queued"
+            }
+          },
+          {
+            "id": 7,
+            "at": "2026-10-10T14:06:56.102Z",
+            "actor": "flan",
+            "action": "everyone",
+            "target": null,
+            "repo": "repo-c522d9cf",
+            "message_id": 7,
+            "detail": {
+              "pushed": []
+            }
+          },
+          {
+            "id": 6,
+            "at": "2026-10-10T14:06:55.706Z",
+            "actor": "flan",
+            "action": "member_add",
+            "target": "temp",
+            "repo": null,
+            "message_id": null,
+            "detail": {
+              "kind": "computational",
+              "role": "member",
+              "can_address_agents": true
+            }
+          },
+          {
+            "id": 5,
+            "at": "2026-10-10T14:06:55.702Z",
+            "actor": "flan",
+            "action": "member_add",
+            "target": "grace",
+            "repo": null,
+            "message_id": null,
+            "detail": {
+              "kind": "computational",
+              "role": "member",
+              "can_address_agents": true
+            }
+          },
+          {
+            "id": 4,
+            "at": "2026-10-10T14:06:55.697Z",
+            "actor": "flan",
+            "action": "member_add",
+            "target": "kieran",
+            "repo": null,
+            "message_id": null,
+            "detail": {
+              "kind": "computational",
+              "role": "member",
+              "can_address_agents": false
+            }
+          },
+          {
+            "id": 3,
+            "at": "2026-10-10T14:06:55.693Z",
+            "actor": "flan",
+            "action": "member_add",
+            "target": "ezra",
+            "repo": null,
+            "message_id": null,
+            "detail": {
+              "kind": "human",
+              "role": "member",
+              "can_address_agents": true
+            }
+          },
+          {
+            "id": 2,
+            "at": "2026-10-10T14:06:55.689Z",
+            "actor": "flan",
+            "action": "member_add",
+            "target": "mira",
+            "repo": null,
+            "message_id": null,
+            "detail": {
+              "kind": "human",
+              "role": "member",
+              "can_address_agents": true
+            }
+          },
+          {
+            "id": 1,
+            "at": "2026-10-10T14:06:55.679Z",
+            "actor": "flan",
+            "action": "member_add",
+            "target": "thom",
+            "repo": null,
+            "message_id": null,
+            "detail": {
+              "kind": "computational",
+              "role": "member",
+              "can_address_agents": true
+            }
+          }
+        ]
+      }
+    },
+    "not-found": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/nope",
+        "as": "thom"
+      },
+      "status": 404,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "not_found",
+          "message": "no such route"
+        }
+      }
+    },
+    "stream-epoch": {
+      "request": {
+        "method": "GET",
+        "path": "/v1/repos/repo-c522d9cf/stream",
+        "as": "thom"
+      },
+      "status": 200,
+      "content_type": "text/event-stream; charset=utf-8",
+      "file": "sse/epoch.sse"
+    },
+    "post-rate-limited": {
+      "request": {
+        "method": "POST",
+        "path": "/v1/repos/repo-457bd3d4/messages",
+        "as": "thom",
+        "body": {
+          "to": "#chat",
+          "body": "two"
+        }
+      },
+      "status": 429,
+      "content_type": "application/json; charset=utf-8",
+      "body": {
+        "error": {
+          "code": "rate_limited",
+          "message": "limit is 1 messages per minute"
+        }
+      }
+    }
+  }
+}

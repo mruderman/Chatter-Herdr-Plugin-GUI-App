@@ -1,0 +1,50 @@
+retry: 2000
+
+event: hello
+data: {"epoch":"1707570-1791641215602","max_id":1}
+
+id: 2
+event: message
+data: {"id":2,"from":"thom","to":"#chat","body":"hello from thom","kind":"post","ref_id":null,"created_at":"2026-10-10T14:06:55Z","mentions":[],"everyone":false}
+
+id: 3
+event: message
+data: {"id":3,"from":"mira","to":"#chat","body":"morning all, @thom can you check the deploy notes?","kind":"post","ref_id":null,"created_at":"2026-10-10T14:06:55Z","mentions":["thom"],"everyone":false}
+
+id: 4
+event: message
+data: {"id":4,"from":"thom","to":"mira","body":"sure, sending the details privately","kind":"chat","ref_id":null,"created_at":"2026-10-10T14:06:55Z","mentions":[],"everyone":false}
+
+id: 5
+event: message
+data: {"id":5,"from":"mira","to":"thom","body":"thanks!","kind":"chat","ref_id":null,"created_at":"2026-10-10T14:06:56Z","mentions":[],"everyone":false}
+
+id: 7
+event: message
+data: {"id":7,"from":"flan","to":"#chat","body":"@everyone standup in five","kind":"post","ref_id":null,"created_at":"2026-10-10T14:06:56Z","mentions":[],"everyone":true}
+
+id: 9
+event: message
+data: {"id":9,"from":"grace","to":"#chat","body":"@codex can you summarise the open questions?","kind":"post","ref_id":null,"created_at":"2026-10-10T14:06:56Z","mentions":["codex"],"everyone":false}
+
+id: 11
+event: message
+data: {"id":11,"from":"thom","to":"#chat","body":"ping @ghost","kind":"post","ref_id":null,"created_at":"2026-10-10T14:06:56Z","mentions":["ghost"],"everyone":false}
+
+id: 12
+event: message
+data: {"id":12,"from":"flan","to":"#chat","body":"ünïcödé — 𝄞 multi-byte check","kind":"post","ref_id":null,"created_at":"2026-10-10T14:06:56Z","mentions":[],"everyone":false}
+
+id: 13
+event: message
+data: {"id":13,"from":"grace","to":"#chat","body":"<b>not bold</b> <script>alert(1)</script> https://example.com/x?y=1&z=2","kind":"post","ref_id":null,"created_at":"2026-10-10T14:06:56Z","mentions":[],"everyone":false}
+
+id: 14
+event: message
+data: {"id":14,"from":"mira","to":"#chat","body":"line one\nline two\n  indented","kind":"post","ref_id":null,"created_at":"2026-10-10T14:06:56Z","mentions":[],"everyone":false}
+
+: ping
+
+event: bye
+data: {"reason":"token_rotated"}
+

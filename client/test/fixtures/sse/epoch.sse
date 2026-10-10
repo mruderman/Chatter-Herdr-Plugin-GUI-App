@@ -1,0 +1,8 @@
+retry: 2000
+
+event: hello
+data: {"epoch":"1707570-1791641215602","max_id":16}
+
+event: bye
+data: {"reason":"epoch"}
+
