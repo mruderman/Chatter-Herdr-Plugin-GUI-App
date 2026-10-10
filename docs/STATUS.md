@@ -1,7 +1,7 @@
-**Updated:** 2026-10-10 · `m3-client` at `e46af02` with T0, T1, T1b, T1c, T2 and T4 merged; `npm test` 63 pass / 0 fail / 0 skipped; client typecheck clean, 255 unit tests pass with real Chatter; E2E suite 24 tests (6 pass against the placeholder, 18 fail at the first contract selector, as designed) · G0 in Codex round 3, Wave 1: T3 and T2b running
+**Updated:** 2026-10-10 · `m3-client` at `e46af02` plus docs; `npm test` 63 pass / 0 fail / 0 skipped; client typecheck clean, 255 unit tests pass with real Chatter; E2E suite 24 tests (6 pass against the placeholder, 18 fail at the first contract selector, as designed) · G0 closed at GO (Codex round 3: zero findings), T1d test hardening running, G1 waits on T3 and T2b
 
 ## Where we are
-- Phase: M3 (web client core). Done: T0 `d7ceb1f`, T1 `616ccb9`, T1b `35a7315`, T1c `e46af02`, T2 `ef17d87`, T4 `07fac03`. Open: G0 (Codex round 3 on `e46af02`) and G1 (needs T2b and T3). Running: T3, T2b.
+- Phase: M3 (web client core). Done: T0 `d7ceb1f`, T1 `616ccb9`, T1b `35a7315`, T1c `e46af02`, T2 `ef17d87`, T4 `07fac03`; G0 closed at GO. Open: G1 (needs T2b and T3). Running: T3, T2b, T1d.
 - Branch: `m3-client` (from `main` at `2e09e44`), not pushed. Nothing is pushed without Flan's go-ahead.
 - Agreed 2026-10-09: go; `/brief` and `/role` deferred (Q2); Claude subagents code, Codex reviews read-only; run to the M3 gate; up to 3 executors at once.
 - Wave 1 started before G0 fully closed, on purpose: T1b only hardened edge cases of the static server (symlink escapes, response framing), not the surface Wave 1 consumes (CSP, headers, SPA fallback). G1 cannot close before G0 does.
@@ -11,7 +11,7 @@ All run in the background; each completion notice returns to this session. Workt
 
 | Task | Executor | Holds | When it lands |
 |---|---|---|---|
-| G0 round 3: Codex CLI, `--sandbox read-only`, fresh session on `e46af02`, patched sites first (`isAbsent`, `whyUnresolved`, `openInside`, the new tests) | Codex, running since the T1c merge | prompt `scratchpad/codex-g0/prompt-round3-final.md`, answer `scratchpad/codex-g0/review-round3.md`; the exit notice returns to this session | re-verify every finding on the source; GO means zero surviving findings (curve so far: round 1 had 3 Medium and 1 Low, round 2 had 1 Medium and 1 Low; stop rule: findings must keep falling). T1c itself verified: 63 tests, 29 of 29 applicable mutations caught, EACCES case reproduced before and after on the real CLI |
+| T1d error-injection tests for the absence rule (tests only; Codex round 3 found no defect, but I ran its proposed mutations and four are unguarded: adding EIO, EPERM or EMFILE to `ABSENT`, and the `open` catch refusing unconditionally; brief in the plan) | Sonnet, running | `bridge/test/static.test.js` | rerun the suite, all my mutation sets plus `mutate-round3.sh` (the four must now be caught); commit; cherry-pick; no Codex round (no production change) |
 | T2b store contract amendments at G1 (alphabetical observed DM labels, burst-across-conversations text, `refreshDirectory()`, 403 start state; brief in the plan) | Sonnet, running (BASE `ef17d87`) | `client/src/state/types.ts`, `fake.ts`, `fake.test.ts` | typecheck and tests green; no PROVISIONAL text left; then the contract is frozen at G1 once T3 has landed too |
 | T3 design system and shell | Sonnet, running (BASE `a2adec9`) | `client/src/styles/**`, `features/shell/**`, `features/index.ts`, `app.tsx`, `main.tsx`, `test/toolchain.test.tsx` (retarget only) | on landing: run its tests, build, check:dist; look at the shell in a real browser (axe per theme); check the contrast assertions against `tokens.css` |
 
