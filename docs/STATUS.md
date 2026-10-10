@@ -1,35 +1,36 @@
-**Updated:** 2026-10-10 · `m3-client` at `616ccb9` (docs plus the static server); `npm test` there 54 pass / 0 fail / 0 skipped · Wave 0: T1 Done, T0 and the G0 review running
+**Updated:** 2026-10-10 · `m3-client` at `2c60253` (T0 and T1 merged; docs) · `npm test` 54 pass / 0 fail / 0 skipped; client: typecheck, 30 unit tests, build and check:dist pass · Wave 0 closing, Wave 1 started
 
 ## Where we are
-- Phase: M3 (web client core), Wave 0. T1 is Done and merged. G0 needs T0, the Codex review of T1, and my re-check of T0's dependency table.
+- Phase: M3 (web client core). Done: T0 at `d7ceb1f`, T1 at `616ccb9`. Open: G0 (T1b plus Codex round 2). Running: T1b, T2, T4. Waiting for a slot: T3.
 - Branch: `m3-client` (from `main` at `2e09e44`), not pushed. Nothing is pushed without Flan's go-ahead.
 - Agreed 2026-10-09: go; `/brief` and `/role` deferred (Q2); Claude subagents code, Codex reviews read-only; run to the M3 gate; up to 3 executors at once.
-- Subagent writes verified 2026-10-10 after Flan disabled the `waterfall` plugin and reloaded plugins twice (probe file landed).
+- Wave 1 started before G0 fully closed, on purpose: T1b only hardens edge cases of the static server (symlink escapes, response framing), not the surface Wave 1 consumes (CSP, headers, SPA fallback). G1 cannot close before G0 does.
 
 ## In flight
-| Task | State | Executor | Where | When it lands |
-|---|---|---|---|---|
-| T0 scaffold and deps | Finished and cherry-picked at `d7ceb1f`; acceptance still open: clean `npm ci` plus every check from `m3-client`, and the real-browser CSP load | Sonnet subagent, finished | worktree under `.claude/worktrees/` (now only a leftover) | finish my checks; if one fails, fix forward or revert before Wave 1 |
-| T1b static follow-ups | dispatching now (see below for the run) | Opus subagent | worktree under `.claude/worktrees/`, holds `bridge/src/static.js` and `bridge/test/static.test.js` | verify (tests, reproductions rerun, mutations), commit, cherry-pick, then Codex round 2 on the patched sites |
+All run in the background; each completion notice returns to this session. Worktrees are under `.claude/worktrees/`; `git worktree list` shows them (T2 and T4 at BASE `2c60253`, T1b at `2cc944c`).
 
-Done: T1 at `616ccb9`. Evidence: I reran the 54 tests; read `static.js` in full; drove the real CLI and curl (21 probes: nothing outside the root served, CSP byte-exact on every static response, API and `/healthz` untouched, bad dirs refused at startup); reran the four required mutations plus two extras on a scratch copy (15, 1, 1, 1, 1, 1 failing tests).
+| Task | Executor | Holds | When it lands |
+|---|---|---|---|
+| T1b static follow-ups (escape-symlink fallback, Content-Length framing, descriptor-closure test; brief in the plan) | Opus | `bridge/src/static.js`, `bridge/test/static.test.js` | rerun tests, my reproductions (`scratchpad/verify-t1-findings.sh`) and all 17 mutations (`mutate-t1-extra.sh`); commit; cherry-pick; Codex round 2 on the patched sites (target: zero surviving findings) |
+| T2 API module and state contract | Opus | `client/src/api/**`, `client/src/state/types.ts`, `fake.ts`, `client/test/fixtures/**`, `client/scripts/record-fixtures.mjs` | fixtures regenerate with no token or temp path in them; read the store contract myself; diff the types against live responses (G1); commit; cherry-pick |
+| T4 E2E harness and blind gate specs | Opus, blind to UI source | `client/e2e/**`, `client/playwright.config.ts` | smoke green; every other spec fails at an expected selector; read the specs for tautologies; the mutation checks come at T10 |
+| T3 design system and shell | Sonnet | `client/src/styles/**`, `features/shell/**`, `features/index.ts`, `app.tsx`, `main.tsx`, `test/toolchain.test.tsx` (retarget only) | dispatch the moment a slot frees (width limit 3) |
 
-## G0 progress (2026-10-10)
-- T0 committed and cherry-picked at `d7ceb1f`. My checks so far: footprint inside held paths; all 209 lockfile name@version pairs published before 2026-09-25 (newest `electron-to-chromium@1.5.439`, 2026-09-24); 12 of 12 direct deps exact pins; registry sources and integrity everywhere; `fsevents` (darwin-only) the only install script; engines floor corrected to Node 22.13. Still to do: clean `npm ci` and every check from `m3-client`, and a real browser load of the built page through the bridge's CSP.
-- Codex round 1 on `616ccb9`: 3 Medium plus 1 Low coverage finding; I reproduced all of them on the real CLI. Decisions are in the plan (T1b): patch the escape-symlink fallback, the Content-Length framing and the descriptor-closure test gap; do not patch the dot-segment normalisation point. Of Codex's 17 proposed mutations 16 are caught; `sendFile` not closing its handle is the unguarded one.
-- Accepted for now, revisit: `source-map-js` 1.2.1 has a high advisory (GHSA-68fv-2mgg-jv7q, build and test time only, not in `dist`); the fix 1.2.2 was published 2026-09-30 and becomes eligible under the two-week rule on 2026-10-14, then add an `overrides` pin and rerun `docs/dependencies.md`.
+Leftover finished worktrees (T0 and T1) stay until the milestone ends; their commits are already cherry-picked.
 
 ## Open warnings
-- Codex: ping and one real review launch work under `--sandbox read-only` (weekly window was 4.0% used). Finding quality not yet seen. Fallback is a fresh Opus subagent and Flan is told.
-- Playwright pin settled by T0's tarball check: `@playwright/test` 1.63.0 (published 2026-09-04) needs Chromium 1243, headless shell 1243 and ffmpeg 1011, all cached; fallback 1.62.1. Never run `playwright install`, not even `--dry-run`. The headless launch is not yet verified.
-- The hand-back call can be refused ("only the auto-mode classifier can allow SubagentHandback: the session is not in auto mode"). Executors also write `.executor-report.md` in their worktree (git-excluded); if a report does not arrive, parse the transcript under `/tmp/claude-1000/.../tasks/`.
-- The harness builds executor worktrees from `main`, not `m3-client`; every prompt starts with Step 0 (template in the plan). The worktree isolation guard also rejects some compound shell commands; executors use plain single commands.
+- Codex: ping and one real review work under `--sandbox read-only`; round 1 found 3 Medium plus 1 Low, all reproduced. Round 2 is the next use. Fallback is a fresh Opus subagent and Flan is told.
+- Accepted for now, revisit on 2026-10-14: `source-map-js` 1.2.1 has a high advisory (GHSA-68fv-2mgg-jv7q; build and test time only; not in `dist`). The fix 1.2.2 was published 2026-09-30; once it is 14 days old add an `overrides` pin, regenerate the lockfile and rerun `docs/dependencies.md`.
+- Brand-new majors pinned (TypeScript 7.0.2, Vite 8.3.1, Vitest 5.0.1, jsdom 29.1.1): all work today; older lines are untried fallbacks if a task hits a toolchain bug.
+- The hand-back call can be refused ("only the auto-mode classifier can allow SubagentHandback"). Executors also write `.executor-report.md` in their worktree (git-excluded); if a report does not arrive, parse the transcript under `/tmp/claude-1000/.../tasks/`.
+- The harness builds executor worktrees from `main`, not `m3-client`; every prompt starts with Step 0 and I also fast-forward each new worktree myself. The worktree isolation guard rejects some compound shell commands; executors use plain single commands.
 - If a hook refuses an executor's write again: stop, tell Flan, never work around it.
 
 ## Debt
 1. `/brief` and `/role` are out of M3 (Q2); they need new bridge routes and `chatter brief --json` verified first.
 2. `idb` joins in M4. `client/dist` is gitignored (F14): M5 packaging and the systemd unit must build it, and must restart the bridge after a deploy that re-points a symlinked static directory (the root's realpath is resolved once at startup).
 3. Still open from CLAUDE.md: D11, D9, Prime Agent identity, live-pane delivery needs a real Herdr.
+4. A test-hygiene smell in `static.test.js`: when `createBridge` throws in a setup, the runner hangs (seen only under mutation S2). Not fixed.
 
 ## Next
-When T0 lands: accept it (checkpoint verification, convention gate), commit and cherry-pick. When the Codex review lands: re-verify its findings on the source. Then G0 closes, and Wave 1 (T2, T3, T4) is dispatched from the briefs and template in the plan.
+As each of T1b, T2 and T4 lands: accept it (checkpoint verification, convention gate), commit and cherry-pick. When T1b lands, dispatch T3 into the freed slot and run Codex round 2. G1 (types against live responses, UI contract frozen) closes Wave 1; then Wave 2 (T5, T8, T7).
