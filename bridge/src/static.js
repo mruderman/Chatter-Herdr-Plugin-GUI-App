@@ -87,13 +87,30 @@ function refuse(req, res, status) {
 }
 
 /**
+ * Why `candidate` does not resolve: OUTSIDE if the deepest ancestor that does resolve lands outside
+ * the root, or if the entry just below that ancestor exists but resolves nowhere (a dangling symlink
+ * or a loop); otherwise MISSING. Past an escape the answer then cannot depend on what exists out
+ * there, so the SPA fallback cannot be used to probe it. Nothing is opened here.
+ */
+async function whyUnresolved(root, candidate) {
+  for (let child = candidate; child !== root; child = path.dirname(child)) {
+    let parent;
+    try { parent = await fsp.realpath(path.dirname(child)); } catch { continue; }
+    if (parent !== root && !isInside(root, parent)) return OUTSIDE;
+    try { await fsp.lstat(child); } catch { return MISSING; }
+    return OUTSIDE;
+  }
+  return OUTSIDE; // the root itself no longer resolves
+}
+
+/**
  * Opens the regular file at `candidate`, following symlinks only to targets inside `root`.
  * Returns { handle, size }, MISSING or OUTSIDE. The handle is opened on the resolved path, so the
  * file streamed is the file that was checked.
  */
 async function openInside(root, candidate) {
   let real;
-  try { real = await fsp.realpath(candidate); } catch { return MISSING; }
+  try { real = await fsp.realpath(candidate); } catch { return whyUnresolved(root, candidate); }
   if (!isInside(root, real)) return OUTSIDE;
   let handle;
   try {
@@ -107,13 +124,24 @@ async function openInside(root, candidate) {
 
 async function sendFile(req, res, { handle, size }, type, cache) {
   try {
+    // A file that shrinks while it is sent must not leave a keep-alive client waiting for bytes
+    // that will never come: with this set, res.end() throws rather than end a response short.
+    res.strictContentLength = true;
     res.writeHead(200, headers(type, size, cache));
-    if (req.method === 'HEAD') {
+    // An empty file has nothing to read, and `end: -1` is not a valid range.
+    if (req.method === 'HEAD' || size === 0) {
       res.end();
     } else {
-      // A client that leaves early, or a read that fails once the headers are out, rejects here.
-      // pipeline has already destroyed the response, so there is nothing left to answer.
-      await pipeline(handle.createReadStream({ autoClose: false }), res).catch(() => {});
+      try {
+        // At most `size` bytes, so a file that grows while it is sent cannot overrun its Content-Length.
+        // end: false keeps res.end() out of pipeline's 'end' listener, where its throw would be uncaught.
+        await pipeline(handle.createReadStream({ start: 0, end: size - 1, autoClose: false }), res, { end: false });
+        res.end();
+      } catch {
+        // The client left, a read failed or the file shrank: the response cannot be completed,
+        // so the connection ends instead.
+        res.destroy();
+      }
     }
   } finally {
     await handle.close();

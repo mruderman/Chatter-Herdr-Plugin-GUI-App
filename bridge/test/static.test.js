@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -21,6 +22,9 @@ const SECRET = 'SENTINEL-must-never-be-served';
 const INDEX = '<!doctype html><html lang="en"><title>Chatter</title><div id="app"></div></html>\n';
 const NO_SUCH_ROUTE = '{"error":{"code":"not_found","message":"no such route"}}';
 const IMMUTABLE = 'public, max-age=31536000, immutable';
+// Far more than loopback socket buffers take in while a client is not reading, so a response this
+// large is still in flight when a test changes the file under it.
+const BIG = 32 * 1024 * 1024;
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'chatter-bridge.js');
 
 /** A static root, plus files outside it (and hidden inside it) that must never be served. */
@@ -78,6 +82,42 @@ function hit(base, rawPath, { method = 'GET', headers = {} } = {}) {
     });
     req.on('error', reject);
     req.end();
+  });
+}
+
+/**
+ * One GET over a bare socket, read until the server closes it: every byte that went on the wire,
+ * where an HTTP client would stop at Content-Length. On the first bytes the client stops reading,
+ * holding the response mid-flight; `midway(socket)` runs on the next turn, then reading resumes.
+ * Gives up after `ms` and reports `timedOut`.
+ */
+function rawGet(base, rawPath, { keepAlive = false, midway = () => {}, ms = 2000 } = {}) {
+  const { hostname, port } = new URL(base);
+  return new Promise((resolve) => {
+    const socket = net.connect(Number(port), hostname);
+    const chunks = [];
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; socket.destroy(); }, ms);
+    socket.on('data', (chunk) => {
+      chunks.push(chunk);
+      if (chunks.length > 1) return;
+      socket.pause();
+      setImmediate(() => { midway(socket); socket.resume(); });
+    });
+    socket.on('error', () => {}); // a reset is one of the outcomes under test, and 'close' follows it
+    socket.on('close', () => {
+      clearTimeout(timer);
+      const bytes = Buffer.concat(chunks);
+      const split = bytes.indexOf('\r\n\r\n');
+      const head = bytes.subarray(0, split).toString('latin1');
+      resolve({
+        timedOut,
+        status: Number(head.split(' ')[1]),
+        length: Number(/^content-length: *(\d+)/im.exec(head)?.[1]),
+        body: bytes.subarray(split + 4),
+      });
+    });
+    socket.write(`GET ${rawPath} HTTP/1.1\r\nHost: ${hostname}\r\n${keepAlive ? '' : 'Connection: close\r\n'}\r\n`);
   });
 }
 
@@ -357,6 +397,125 @@ describe('static web client', () => {
     refuses(dir('empty'), /no index\.html/);
     refuses(dir('index-is-dir'), /no index\.html/);
     refuses(dir('index-escapes'), /no index\.html/);
+  });
+
+  test('a path through a symlink that leaves the root, or one that resolves nowhere, gets no shell', async () => {
+    const html = { headers: { accept: NAVIGATION } };
+    // Made here, not in makeSite, so the tests above keep the site they were written against.
+    const links = {
+      dangling: path.join(site.tmp, 'outside', 'not-created'),
+      'dangling-in': path.join(site.root, 'not-created'),
+      'sub/dangling': path.join(site.tmp, 'nowhere'),
+      loop: path.join(site.root, 'loop'),
+      'inner-dir': path.join(site.root, 'sub'),
+    };
+    for (const [link, target] of Object.entries(links)) fs.symlinkSync(target, path.join(site.root, link));
+    try {
+      // Past an escape the answer is the same 404 whether or not anything exists there, so it reveals nothing.
+      for (const p of ['/escape-dir/not-created', '/escape-dir/inner/not-created', '/escape-dir/no/such/dir', '/escape-route/x']) {
+        assertRefused(await hit(base, p, html), 404, p);
+      }
+      // A link that resolves nowhere is refused wherever it sits and whatever it points to; so is a loop.
+      for (const p of ['/dangling', '/dangling/x', '/dangling-in', '/sub/dangling', '/sub/dangling/x/y', '/loop', '/loop/x']) {
+        assertRefused(await hit(base, p, html), 404, p);
+      }
+      // An ordinary missing path under a directory inside the root is a client-side route, at any depth.
+      for (const p of ['/a/b/c', '/sub/missing', '/sub/x/y/z', '/inner-dir/missing', '/inner-dir/x/y']) {
+        assertServed(await hit(base, p, html), INDEX, 'text/html; charset=utf-8', 'no-cache', p);
+      }
+    } finally {
+      for (const link of Object.keys(links)) fs.unlinkSync(path.join(site.root, link));
+    }
+  });
+
+  test('an empty file is a 200 with an empty body', async () => {
+    const empty = path.join(site.root, 'empty.txt');
+    fs.writeFileSync(empty, '');
+    try {
+      assertServed(await hit(base, '/empty.txt'), '', 'text/plain; charset=utf-8', 'no-cache');
+    } finally {
+      fs.unlinkSync(empty);
+    }
+  });
+
+  test('a file that shrinks while it is sent ends the connection instead of leaving the client waiting', async () => {
+    const file = path.join(site.root, 'assets', 'shrinks-0001.bin');
+    fs.writeFileSync(file, Buffer.alloc(BIG, 1));
+    try {
+      // Keep-alive, as a browser holds it: after a short response only the server's 5 s keep-alive
+      // timeout would end the wait, so the bound sits well under that.
+      const r = await rawGet(base, '/assets/shrinks-0001.bin', { keepAlive: true, midway: () => fs.truncateSync(file, 0), ms: 2000 });
+      assert.equal(r.status, 200);
+      assert.equal(r.length, BIG, 'declares the size the file had when it was opened');
+      assert.ok(!r.timedOut, `the client was left waiting after ${r.body.length} of ${BIG} bytes`);
+      assert.ok(r.body.length < BIG, 'the file shrank before it was all sent');
+      assertServed(await hit(base, '/robots.txt'), site.bytes('robots.txt'), 'text/plain; charset=utf-8', 'no-cache');
+    } finally {
+      fs.rmSync(file);
+    }
+  });
+
+  test('a file that grows while it is sent puts exactly the declared bytes on the wire', async () => {
+    const file = path.join(site.root, 'assets', 'grows-0001.bin');
+    fs.writeFileSync(file, Buffer.alloc(BIG, 1));
+    try {
+      const r = await rawGet(base, '/assets/grows-0001.bin', { midway: () => fs.appendFileSync(file, Buffer.alloc(1024 * 1024, 2)), ms: 10_000 });
+      assert.ok(!r.timedOut, 'the response never finished');
+      assert.equal(r.status, 200);
+      assert.equal(r.length, BIG);
+      assert.equal(r.body.length, BIG, 'bytes after the headers');
+      assert.ok(r.body.equals(Buffer.alloc(BIG, 1)), 'only the bytes the file had when it was opened');
+    } finally {
+      fs.rmSync(file);
+    }
+  });
+
+  test('every file descriptor the handler opens is closed again', { skip: process.platform !== 'linux' && 'counts descriptors through /proc/self/fd, which only Linux has' }, async () => {
+    // A site and bridge of its own, so that only this test's requests can move the count.
+    const own = makeSite();
+    const bridge = createBridge({ store, host, staticDir: own.root });
+    const ownBase = `http://127.0.0.1:${(await bridge.listen(0)).port}`;
+    // Only descriptors on files under the root: sockets are http's to close, on their own schedule.
+    const under = fs.realpathSync(own.root) + path.sep;
+    const openFiles = () => fs.readdirSync('/proc/self/fd').filter((fd) => {
+      try { return fs.readlinkSync(`/proc/self/fd/${fd}`).startsWith(under); } catch { return false; } // closed meanwhile
+    }).length;
+    // The garbage collector closes a FileHandle nobody closed, which would hide the leak from the count;
+    // it reports each one in a process warning, which --no-warnings silences but does not suppress.
+    const collected = [];
+    const onWarning = (w) => { if (/garbage collection/.test(w.message)) collected.push(w.message); };
+    process.on('warning', onWarning);
+    fs.writeFileSync(path.join(own.root, 'assets', 'held-0001.bin'), Buffer.alloc(BIG, 1));
+    try {
+      const baseline = openFiles();
+      // A descriptor is closed a moment after its response ends.
+      const settled = async () => {
+        for (const deadline = Date.now() + 2000; openFiles() !== baseline && Date.now() < deadline;) await new Promise((r) => setTimeout(r, 10));
+        return openFiles();
+      };
+      // Downloads abandoned mid-stream, first, so their large reads are over before the count that matters.
+      for (let i = 0; i < 3; i++) {
+        let during;
+        await rawGet(ownBase, '/assets/held-0001.bin', { midway: (socket) => { during = openFiles(); socket.destroy(); } });
+        assert.equal(during, baseline + 1, 'a download in flight holds exactly one descriptor');
+        assert.equal(await settled(), baseline, 'an abandoned download gives it back');
+      }
+      const html = { headers: { accept: NAVIGATION } };
+      for (let round = 0; round < 10; round++) {
+        for (const p of ['/', '/assets/app-3f2a.js', '/linked.js', '/my%20file.txt']) await hit(ownBase, p);
+        await hit(ownBase, '/chat/general', html);
+        for (const p of ['/', '/robots.txt', '/chat/general']) await hit(ownBase, p, { method: 'HEAD', ...html });
+        // Refusals, among them directories, which are opened before they are turned away.
+        for (const p of ['/sub', '/assets', '/missing.js', '/escape.txt', '/escape-dir/not-created', '/%ZZ', '/.env']) await hit(ownBase, p, html);
+      }
+      assert.equal(await settled(), baseline, 'descriptors left open');
+      await new Promise((r) => setTimeout(r, 10)); // the warning comes a turn after the collector's close
+      assert.deepEqual(collected, [], 'descriptors left for the garbage collector to close');
+    } finally {
+      process.off('warning', onWarning);
+      await bridge.close();
+      fs.rmSync(own.tmp, { recursive: true, force: true });
+    }
   });
 });
 
