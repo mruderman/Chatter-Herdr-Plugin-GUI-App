@@ -114,7 +114,7 @@ interface PageDump {
 
 /** Storage, IndexedDB, the page's HTML and its form controls' values, minus any "New token for ..." dialog. */
 async function dumpPage(page: Page): Promise<PageDump> {
-  return page.evaluate(async (newTokenPrefix) => {
+  return page.evaluate(async ({ newTokenPrefix, signInLabel }) => {
     const unreadable: string[] = [];
     const storage: string[] = [];
     for (const [name, area] of [['localStorage', () => window.localStorage], ['sessionStorage', () => window.sessionStorage]] as const) {
@@ -171,15 +171,19 @@ async function dumpPage(page: Page): Promise<PageDump> {
     walk(document.documentElement);
 
     // A form control's live value is not HTML, so the walk never sees it. The sign-in field holds the token
-    // until sign-in succeeds (ui-contract section 1, type=password), and a "New token" dialog holds a new one.
+    // until sign-in succeeds (ui-contract section 1) and a "New token" dialog holds a new one: those two are
+    // exempt. The sign-in field is found by its label, not by its type, so that a second password input
+    // holding the token, left behind after sign-in, is still a leak.
+    const isSignInField = (el: Element): boolean =>
+      el instanceof HTMLInputElement && el.type === 'password' && Array.from(el.labels ?? []).some((label) => (label.textContent ?? '').trim() === signInLabel);
     const values: string[] = [];
     for (const el of Array.from(document.querySelectorAll('input, textarea, select'))) {
       if ([...exempt].some((d) => d.contains(el))) continue;
-      if (el instanceof HTMLInputElement && el.type === 'password') continue;
+      if (isSignInField(el)) continue;
       if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) values.push(el.value);
     }
     return { storage: storage.join('\n'), indexedDb: idb.join('\n'), dom: dom.join('\n'), values: values.join('\n'), unreadable };
-  }, UI.admin.newTokenPrefix);
+  }, { newTokenPrefix: UI.admin.newTokenPrefix, signInLabel: UI.signIn.token });
 }
 
 /**

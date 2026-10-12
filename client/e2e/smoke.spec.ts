@@ -111,18 +111,37 @@ test.describe('harness canaries: each guard sees what it exists to catch', () =>
     expect(await tokenLeaks(page, guard, [])).toEqual(['a form control\'s value outside the "New token" dialog']);
     await page.evaluate(() => document.getElementById('e2e-field')?.remove());
 
+    // The exemption is for the sign-in field alone, found by its label. A password input anywhere else that
+    // holds a token is a leak: masking a credential is no licence to keep it.
     await page.evaluate((t) => {
+      const extra = document.createElement('input');
+      extra.type = 'password';
+      extra.id = 'e2e-extra';
+      document.body.append(extra);
+      extra.value = t;
+    }, fake);
+    expect(await tokenLeaks(page, guard, []), 'a password input that is not the sign-in field').toEqual(['a form control\'s value outside the "New token" dialog']);
+    await page.evaluate(() => document.getElementById('e2e-extra')?.remove());
+
+    await page.evaluate((t) => {
+      const label = document.createElement('label');
+      label.id = 'e2e-signin-label';
+      label.htmlFor = 'e2e-signin';
+      label.textContent = 'Access token';
       const signIn = document.createElement('input');
       signIn.type = 'password';
       signIn.id = 'e2e-signin';
-      document.body.append(signIn);
+      document.body.append(label, signIn);
       signIn.value = t;
       const area = document.createElement('textarea');
       document.querySelector('[role="dialog"]')?.append(area);
       area.value = t;
     }, fake);
     expect(await tokenLeaks(page, guard, []), 'the sign-in field and a New token dialog may hold one').toEqual([]);
-    await page.evaluate(() => document.getElementById('e2e-signin')?.remove());
+    await page.evaluate(() => {
+      document.getElementById('e2e-signin')?.remove();
+      document.getElementById('e2e-signin-label')?.remove();
+    });
 
     await page.evaluate((t) => sessionStorage.setItem('e2e', t), fake);
     expect(await tokenLeaks(page, guard, [])).toEqual(['localStorage or sessionStorage']);
@@ -164,6 +183,7 @@ test.describe('harness canaries: each guard sees what it exists to catch', () =>
     expect(shown.length, 'the error was recorded').toBeGreaterThan(0);
     expect(shown.some((line) => line.includes(fake)), 'what is printed or annotated is redacted').toBe(false);
     expect(guard.pageErrors, 'handed back and forgotten').toEqual([]);
+    expect(guard.pageErrorsHoldToken([]), 'the raw copy is forgotten with it').toBe(false);
   });
 
   test('an uncaught page error fails the test that left it behind', async ({ open }) => {
@@ -173,7 +193,9 @@ test.describe('harness canaries: each guard sees what it exists to catch', () =>
     const { page, guard } = await open();
     await page.goto('/');
     await page.evaluate(() => { setTimeout(() => { throw new Error('a canary error with no token in it'); }, 0); });
-    await expect.poll(() => guard.pageErrors.length).toBeGreaterThan(0);
+    // Waits without asserting. If the guard stopped recording the error nothing fails here, the test passes, and
+    // test.fail() reports that as a failure: the only way to be marked as failing is the fixture's own check.
+    for (let waited = 0; guard.pageErrors.length === 0 && waited < 5_000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
   });
 
   test('axe runs under the D15 CSP without causing a violation', async ({ open }) => {
