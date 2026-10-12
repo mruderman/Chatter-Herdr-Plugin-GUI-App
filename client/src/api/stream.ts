@@ -74,8 +74,10 @@ export interface StreamOptions {
   readonly api: Pick<Api, 'openStream'>;
   readonly repo: string;
   /**
-   * Resume after this id. Pass the `max_id` of the last page loaded, so nothing written between
-   * that page and the stream is missed. Null starts from "now" and adopts the hello's `max_id`.
+   * Resume after this id. Pass the id of the newest message the page returned (0 for an empty page),
+   * not the page's `max_id`: the bridge reads that in a separate statement, so a row written between
+   * the two would be skipped. Null starts from "now" and adopts the hello's `max_id`, which is safe
+   * because the stream has by then replayed everything up to it.
    */
   readonly lastEventId?: number | null;
   /** The epoch `lastEventId` belongs to. A hello with another epoch closes the stream with `resync`. */
