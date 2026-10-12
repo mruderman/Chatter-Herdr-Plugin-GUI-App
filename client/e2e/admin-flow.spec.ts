@@ -3,6 +3,7 @@
 // that issued it to the moment the dialog closes: each token shown is proven against the bridge, and
 // after each way the "New token" dialog closes no token is left in the page, its storage, its address
 // or its console. Written after T7 from the contract and the harness, not from the panel's source.
+import type { Page } from '@playwright/test';
 import { call, HTTP, nonce, ROUTES, type ApiError } from './harness/api';
 import { seriousViolations } from './harness/axe';
 import { enterChat, expect, signIn, test } from './harness/fixtures';
@@ -18,6 +19,16 @@ const THEMES = [
   { theme: UI.theme.dark, media: { colorScheme: 'dark', contrast: 'no-preference' } },
   { theme: UI.theme.hc, media: { colorScheme: 'light', contrast: 'more' } },
 ] as const;
+
+// Switching theme in a page that is already open starts the buttons' colour transitions (base.css, 120 ms),
+// and axe reads colours as they are at that moment, so a scan right after the switch can report a contrast
+// that nobody ever sees (it did, once, on the header and row buttons). Wait for them to finish before looking.
+async function showTheme(page: Page, media: (typeof THEMES)[number]['media']): Promise<void> {
+  await page.emulateMedia(media);
+  await expect
+    .poll(() => page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length), 'the colour transitions have finished')
+    .toBe(0);
+}
 
 test('admin panel: a computational member is added, its token rotated and the member revoked; each token shown works, and is nowhere once the dialog is closed', async ({ open, world }) => {
   const { page, guard } = await open({ context: { permissions: CLIPBOARD } });
@@ -78,7 +89,7 @@ test('admin panel: a computational member is added, its token rotated and the me
   // The dialog in each theme. The media is switched while it is open, and the backgrounds prove it took effect.
   const backgrounds: string[] = [];
   for (const { theme, media } of THEMES) {
-    await page.emulateMedia(media);
+    await showTheme(page, media);
     backgrounds.push(await page.locator('body').evaluate((el) => getComputedStyle(el).backgroundColor));
     expect.soft(await seriousViolations(page), `axe, the New token dialog, theme "${theme}"`).toEqual([]);
   }
@@ -135,7 +146,7 @@ test('admin panel: a computational member is added, its token rotated and the me
   // The whole panel with both tables full, after a revoked row and these audit entries: what the axe spec's scan
   // of the seeded world does not reach.
   for (const { theme, media } of THEMES) {
-    await page.emulateMedia(media);
+    await showTheme(page, media);
     expect.soft(await seriousViolations(page), `axe, the Admin view with the audit log, theme "${theme}"`).toEqual([]);
   }
   await page.emulateMedia({ colorScheme: 'light', contrast: 'no-preference' });
