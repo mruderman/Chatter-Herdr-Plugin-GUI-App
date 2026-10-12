@@ -14,7 +14,8 @@ import { parseBoard, parseMe, parseMembers } from '../api/guards';
 import { QUERY, ROUTES } from '../api/routes';
 import type { Me } from '../api/types';
 import { AUDIT_LIMIT } from '../features/admin';
-import { createNotifier } from '../features/notify';
+import { NOTIFY_THROTTLE_MS, createNotifier, type NotificationApi } from '../features/notify';
+import { createFakeNotifications } from '../features/notify/fake-notification';
 import { createThemeManager } from '../features/shell';
 import { expectNoAxeViolations, setupUser } from '../features/shell/test-utils';
 import { createFakeStore, FAKE_TOKEN, type FakeStore, type FakeStoreOptions } from '../state/fake';
@@ -43,10 +44,15 @@ const made: Services[] = [];
 afterEach(() => {
   for (const services of made.splice(0)) services.dispose();
   vi.restoreAllMocks();
+  // Put back by lookAtTheApp: restoreAllMocks does not undo a property defined on the document.
+  Reflect.deleteProperty(document, 'visibilityState');
 });
 
-/** Services over the fake store, as createServices makes them over the real one; only the board route answers. */
-function setup(options: FakeStoreOptions = {}) {
+/**
+ * Services over the fake store, as createServices makes them over the real one; only the board route
+ * answers. The notifier has no `Notification` unless one is given (a fake, for the notification tests).
+ */
+function setup(options: FakeStoreOptions = {}, notificationApi: NotificationApi | null = null) {
   const clock = new ManualClock(AFTER_RECORDINGS);
   const store: FakeStore = createFakeStore({ clock, ...options });
   const board = vi.fn<Api['board']>(async () => parseBoard(body('board')));
@@ -54,7 +60,7 @@ function setup(options: FakeStoreOptions = {}) {
     throw new Error('this test has no network');
   };
   const api: Api = { ...createApi({ getToken: () => null, fetch: refuse }), board };
-  const notifier = createNotifier({ store, clock, notificationApi: null, storage: null });
+  const notifier = createNotifier({ store, clock, notificationApi, storage: null });
   const services: Services = {
     store,
     api,
@@ -68,7 +74,7 @@ function setup(options: FakeStoreOptions = {}) {
   made.push(services);
   const themeManager = createThemeManager({ root: document.documentElement, getStorage: () => null });
   render(<AppRoot services={services} themeManager={themeManager} />);
-  return { store, board, clock, user: setupUser() };
+  return { store, board, clock, notifier, user: setupUser() };
 }
 
 const heading = (): string | null => screen.getByRole('heading', { level: 1 }).textContent;
@@ -317,6 +323,94 @@ describe('the registry\'s real views', () => {
     if (button) await user.click(nav().getByRole('button', { name: button }));
     await settle();
     await expectNoAxeViolations();
+  });
+});
+
+/** The person is looking at the app: the page is shown and its window has focus, which is what the notifier calls active. */
+function lookAtTheApp(): void {
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+}
+
+const titles = (shown: readonly { readonly title: string }[]): string[] => shown.map((notification) => notification.title);
+
+// The notifier counts a conversation as in view only while the Chat view is open, and App is what knows
+// which view is open (T12). These run the real App, the real notifier and the real primary navigation.
+describe('Notifications follow the open view', () => {
+  it.each(['Board', 'Members'])(
+    '%s open and the window focused: a mention in the open channel notifies once, and back in Chat the next one is silent',
+    async (view) => {
+      lookAtTheApp();
+      const browser = createFakeNotifications('granted');
+      const { store, clock, user } = setup({}, browser.api);
+
+      // Chat is open and the window focused, so the member is reading it: nothing to tell.
+      act(() => {
+        store.receive({ from: 'mira', body: 'first @thom' });
+      });
+      expect(titles(browser.shown)).toEqual([]);
+
+      await user.click(nav().getByRole('button', { name: view }));
+      await settle();
+      expect(heading()).toBe(view);
+      act(() => {
+        store.receive({ from: 'mira', body: 'second @thom' });
+      });
+      expect(titles(browser.shown)).toEqual(['mira mentioned you']);
+
+      await user.click(nav().getByRole('button', { name: 'Chat' }));
+      expect(heading()).toBe('Chat');
+      // Past the throttle, so that the silence is the Chat view's doing and not the window's.
+      await advance(clock, NOTIFY_THROTTLE_MS);
+      act(() => {
+        store.receive({ from: 'mira', body: 'third @thom' });
+      });
+      expect(titles(browser.shown)).toEqual(['mira mentioned you']);
+    },
+  );
+
+  it('Board open and the window focused: a DM in the open DM notifies once, and back in Chat the next one is silent', async () => {
+    lookAtTheApp();
+    const browser = createFakeNotifications('granted');
+    const { store, clock, user } = setup({}, browser.api);
+    await user.click(within(screen.getByRole('navigation', { name: 'Conversations' })).getByRole('button', { name: 'DM with mira' }));
+    act(() => {
+      store.receive({ from: 'mira', to: 'thom', body: 'first, in private' });
+    });
+    expect(titles(browser.shown)).toEqual([]);
+
+    await user.click(nav().getByRole('button', { name: 'Board' }));
+    await settle();
+    expect(heading()).toBe('Board');
+    act(() => {
+      store.receive({ from: 'mira', to: 'thom', body: 'second, in private' });
+    });
+    expect(titles(browser.shown)).toEqual(['mira sent you a direct message']);
+
+    await user.click(nav().getByRole('button', { name: 'Chat' }));
+    expect(heading()).toBe('Chat');
+    await advance(clock, NOTIFY_THROTTLE_MS);
+    act(() => {
+      store.receive({ from: 'mira', to: 'thom', body: 'third, in private' });
+    });
+    expect(titles(browser.shown)).toEqual(['mira sent you a direct message']);
+  });
+
+  // A signed-out notifier ignores every message, so the only thing that shows the open view was cleared
+  // is what the notifier was told: no conversation can be on screen behind the sign-in form.
+  it('tells the notifier that Chat is no longer open once the member signs out, and open again at the next sign-in', async () => {
+    const { store, notifier } = setup({}, createFakeNotifications('granted').api);
+    const told = vi.spyOn(notifier, 'setChatOpen');
+    act(() => {
+      store.signOut();
+    });
+    expect(heading()).toBe('Sign in');
+    expect(told).toHaveBeenLastCalledWith(false);
+    await act(async () => {
+      await store.signIn(FAKE_TOKEN);
+    });
+    expect(heading()).toBe('Chat');
+    expect(told).toHaveBeenLastCalledWith(true);
   });
 });
 

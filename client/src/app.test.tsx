@@ -1,9 +1,9 @@
 import { screen, within } from '@testing-library/dom';
 import { useState } from 'preact/hooks';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { cleanup, render } from '../test/render';
 import { App, type AppProps } from './app';
-import { VIEW_ID, VIEWS, type ViewDefinition } from './features';
+import { VIEW_ID, VIEWS, type ViewDefinition, type ViewId } from './features';
 import type { ConnectionStatus, NotificationSettings, ShellMember, ShellSession } from './features/shell';
 import { expectNoAxeViolations, setupUser } from './features/shell/test-utils';
 
@@ -551,5 +551,110 @@ describe('the default registry and the default view', () => {
     renderApp({ defaultViewId: VIEW_ID.members });
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Members');
     expect(screen.getByRole('button', { name: 'Members' }).getAttribute('aria-current')).toBe('page');
+  });
+});
+
+// The host (src/wiring/root.tsx) tells the notifier which view is open, and the notifier counts a
+// conversation as in view only while that is Chat (T12). What it is told is the view <main> shows.
+describe('telling the host which view is open (T12)', () => {
+  type Report = (viewId: ViewId | null) => void;
+  const reported = (report: Mock<Report>): Array<ViewId | null> => report.mock.calls.map(([viewId]) => viewId);
+
+  it('reports Chat when the app mounts, then each view the member opens', async () => {
+    const onOpenViewChange = vi.fn<Report>();
+    const user = setupUser();
+    renderApp({ onOpenViewChange });
+    const nav = within(screen.getByRole('navigation', { name: 'Primary' }));
+    for (const name of ['Board', 'Members', 'Admin', 'Chat']) await user.click(nav.getByRole('button', { name }));
+    expect(reported(onOpenViewChange)).toEqual([VIEW_ID.chat, VIEW_ID.board, VIEW_ID.members, VIEW_ID.admin, VIEW_ID.chat]);
+  });
+
+  it('reports the view that is shown: the default view when one is given, not the registry\'s first entry', () => {
+    const onOpenViewChange = vi.fn<Report>();
+    renderApp({ onOpenViewChange, defaultViewId: VIEW_ID.members });
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Members');
+    expect(reported(onOpenViewChange)).toEqual([VIEW_ID.members]);
+  });
+
+  it('reports the view the member falls back to when the open one stops being theirs, not the one they had chosen', async () => {
+    const onOpenViewChange = vi.fn<Report>();
+    function Demoting() {
+      const [member, setMember] = useState(ADMIN);
+      return (
+        <>
+          <button type="button" onClick={() => setMember(MEMBER)}>
+            Demote
+          </button>
+          <App session={signedIn({ member })} themeChoice="system" onThemeChange={() => undefined} onOpenViewChange={onOpenViewChange} />
+        </>
+      );
+    }
+    const user = setupUser();
+    render(<Demoting />);
+    await user.click(screen.getByRole('button', { name: 'Admin' }));
+    await user.click(screen.getByRole('button', { name: 'Demote' }));
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Chat');
+    expect(reported(onOpenViewChange)).toEqual([VIEW_ID.chat, VIEW_ID.admin, VIEW_ID.chat]);
+  });
+
+  it.each<[string, ShellSession]>([
+    ['not yet known', { status: 'unknown' }],
+    ['signed out', signedOut()],
+  ])('reports that no view is open while the session is %s', (_name, session) => {
+    const onOpenViewChange = vi.fn<Report>();
+    renderApp({ onOpenViewChange, session });
+    expect(reported(onOpenViewChange)).toEqual([null]);
+  });
+
+  it('reports that no view is open once the member signs out, and Chat again at the next sign-in', async () => {
+    const onOpenViewChange = vi.fn<Report>();
+    function Cycling() {
+      const [session, setSession] = useState<ShellSession>(signedIn());
+      return (
+        <>
+          <button type="button" onClick={() => setSession(signedOut())}>
+            Sign out
+          </button>
+          <button type="button" onClick={() => setSession(signedIn())}>
+            Sign in again
+          </button>
+          <App session={session} themeChoice="system" onThemeChange={() => undefined} onOpenViewChange={onOpenViewChange} />
+        </>
+      );
+    }
+    const user = setupUser();
+    render(<Cycling />);
+    await user.click(screen.getByRole('button', { name: 'Board' }));
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(reported(onOpenViewChange).at(-1)).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Sign in again' }));
+    expect(reported(onOpenViewChange)).toEqual([VIEW_ID.chat, VIEW_ID.board, null, VIEW_ID.chat]);
+  });
+
+  it('reports a change once, not on every render, even when the host passes a new function each time', async () => {
+    const seen: Array<ViewId | null> = [];
+    function Updating() {
+      const [connection, setConnection] = useState<ConnectionStatus>('online');
+      return (
+        <>
+          <button type="button" onClick={() => setConnection('offline')}>
+            Go offline
+          </button>
+          <App
+            session={signedIn({ connection })}
+            themeChoice="system"
+            onThemeChange={() => undefined}
+            onOpenViewChange={(viewId) => {
+              seen.push(viewId);
+            }}
+          />
+        </>
+      );
+    }
+    const user = setupUser();
+    render(<Updating />);
+    await user.click(screen.getByRole('button', { name: 'Go offline' }));
+    expect(screen.getByRole('status', { name: 'Connection' }).textContent).toBe('Offline');
+    expect(seen).toEqual([VIEW_ID.chat]);
   });
 });

@@ -56,6 +56,12 @@ interface SetupOptions {
   readonly as?: FakeMember;
   readonly permission?: NotificationPermission;
   readonly storage?: NotifierStorage | null;
+  /**
+   * What the shell has told the notifier about the Chat view (T12). Default true: a person who is
+   * looking at a conversation has Chat open, so the tests of "already looking" keep their meaning.
+   * False is another view (Board, Members, Admin); null is nothing said yet.
+   */
+  readonly chatOpen?: boolean | null;
 }
 
 function setup(options: SetupOptions = {}) {
@@ -63,6 +69,7 @@ function setup(options: SetupOptions = {}) {
   const browser = createFakeNotifications(options.permission ?? 'granted');
   const storage = options.storage === undefined ? new MemoryStorage() : options.storage;
   const notifier = createNotifier({ store, clock: store.clock, notificationApi: browser.api, storage });
+  if (options.chatOpen !== null) notifier.setChatOpen(options.chatOpen ?? true);
   return { store, browser, notifier };
 }
 
@@ -313,6 +320,73 @@ describe('when the member is already looking (D17)', () => {
     store.receive({ from: 'mira', to: 'grace', body: 'and @flan too' });
     store.receive({ from: 'grace', to: 'mira', body: 'and @flan again' });
     expect(titles(browser.shown)).toEqual(['mira mentioned you']);
+  });
+});
+
+// The store knows which conversation is selected, not which view of the app is open: the shell tells the
+// notifier (setChatOpen). Without that, a mention in the selected channel was silent with the window
+// focused even while Board, Members or Admin was showing, and Chat's announcements region is not mounted
+// there either, so the member got no signal at all (G2 round 1, finding 7).
+describe('only the Chat view puts a conversation in view (T12)', () => {
+  it('notifies once for a mention in the open channel while another view is open and the window is focused', () => {
+    const { store, browser } = setup({ chatOpen: false });
+    store.receive({ from: 'mira', body: 'hello @thom' });
+    expect(titles(browser.shown)).toEqual(['mira mentioned you']);
+  });
+
+  // The DM has to be the open conversation: a DM that arrives while #chat is open notifies without this change.
+  it('notifies once for a DM in the open DM while another view is open and the window is focused', () => {
+    const { store, browser } = setup({ chatOpen: false });
+    select(store, 'DM with mira');
+    store.receive({ from: 'mira', to: 'thom', body: 'in private' });
+    expect(titles(browser.shown)).toEqual(['mira sent you a direct message']);
+  });
+
+  it('stays silent for the same mention and the same DM while Chat is open', () => {
+    const { store, browser } = setup({ chatOpen: true });
+    store.receive({ from: 'mira', body: 'hello @thom' });
+    select(store, 'DM with mira');
+    store.receive({ from: 'mira', to: 'thom', body: 'in private' });
+    expect(browser.shown).toEqual([]);
+  });
+
+  it('follows the shell: silent in Chat, notifies when the view moves away from it, silent again when it returns', () => {
+    const { store, browser, notifier } = setup();
+    store.receive({ from: 'mira', body: 'one @thom' });
+    expect(browser.shown).toEqual([]);
+    notifier.setChatOpen(false);
+    store.receive({ from: 'mira', body: 'two @thom' });
+    expect(titles(browser.shown)).toEqual(['mira mentioned you']);
+    notifier.setChatOpen(true);
+    // Past the throttle, so that the silence is the view's doing and not the window's.
+    store.clock.advance(NOTIFY_THROTTLE_MS);
+    store.receive({ from: 'mira', body: 'three @thom' });
+    expect(titles(browser.shown)).toEqual(['mira mentioned you']);
+  });
+
+  it('counts nothing as in view until the shell has said that Chat is open', () => {
+    const { store, browser, notifier } = setup({ chatOpen: null });
+    store.receive({ from: 'mira', body: 'one @thom' });
+    expect(titles(browser.shown)).toEqual(['mira mentioned you']);
+    notifier.setChatOpen(true);
+    store.clock.advance(NOTIFY_THROTTLE_MS);
+    store.receive({ from: 'mira', body: 'two @thom' });
+    expect(titles(browser.shown)).toEqual(['mira mentioned you']);
+  });
+
+  // A guard, green before the change as well: another view widens the in-view rule and nothing else.
+  it('still needs a mention or a DM, the preference and the permission while another view is open', () => {
+    const { store, browser, notifier } = setup({ chatOpen: false });
+    store.receive({ from: 'mira', body: 'good morning everybody' });
+    notifier.getSettings().onEnabledChange(false);
+    store.receive({ from: 'mira', body: 'hello @thom' });
+    notifier.getSettings().onEnabledChange(true);
+    browser.setPermission('denied');
+    store.receive({ from: 'mira', to: 'thom', body: 'in private' });
+    expect(browser.shown).toEqual([]);
+    browser.setPermission('granted');
+    store.receive({ from: 'mira', to: 'thom', body: 'and now' });
+    expect(titles(browser.shown)).toEqual(['mira sent you a direct message']);
   });
 });
 

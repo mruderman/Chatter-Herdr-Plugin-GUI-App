@@ -29,6 +29,13 @@ export interface AppProps {
   views?: readonly ViewDefinition[];
   /** The view shown after sign-in; defaults to the first entry of the registry, which is Chat. */
   defaultViewId?: ViewId;
+  /**
+   * Told which view is open: the one <main> shows, after the default view and the admin filter, or null
+   * while there is none (before sign-in, and after sign-out). Called once when the app mounts and again
+   * each time that changes, in the commit that changes the screen. The latest function given is the one
+   * called, so an arrow made afresh on every render of the parent does not repeat the report.
+   */
+  onOpenViewChange?: (viewId: ViewId | null) => void;
 }
 
 /**
@@ -52,7 +59,7 @@ interface ViewChoice {
 
 // Composes the shell from props. It owns only what is purely about the screen (which view is open,
 // whether Settings is open); everything about the session arrives through `session`.
-export function App({ session, themeChoice, onThemeChange, notifications, views = VIEWS, defaultViewId }: AppProps) {
+export function App({ session, themeChoice, onThemeChange, notifications, views = VIEWS, defaultViewId, onOpenViewChange }: AppProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const startView = defaultViewId ?? views[0]?.id;
   const signIn = useSignInCount(session.status);
@@ -75,6 +82,17 @@ export function App({ session, themeChoice, onThemeChange, notifications, views 
   const member = session.status === 'signed-in' ? session.member : null;
   const visibleViews = member ? views.filter((view) => !view.adminOnly || member.isAdmin) : [];
   const current = visibleViews.find((view) => view.id === viewId) ?? visibleViews[0];
+
+  // What the host is told is `current`, the view <main> really shows: not the member's last choice, which
+  // an admin filter may have overruled, and not the registry's first entry. No view is shown before
+  // sign-in or after sign-out, so that is null, which is also how a sign-out clears what was reported.
+  const openViewId = current?.id ?? null;
+  const reportOpenView = useRef(onOpenViewChange);
+  reportOpenView.current = onOpenViewChange;
+  // A layout effect, so that the host knows in the commit that puts the view on screen and not a frame after.
+  useLayoutEffect(() => {
+    reportOpenView.current?.(openViewId);
+  }, [openViewId]);
 
   let content: ComponentChildren = null;
   if (session.status === 'unknown') {

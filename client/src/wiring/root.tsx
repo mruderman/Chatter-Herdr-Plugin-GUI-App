@@ -1,6 +1,7 @@
 // The top of the running app: the services in context, and the component that renders App from the
 // store's snapshot.
 import { App } from '../app';
+import { VIEW_ID } from '../features';
 import { useNotifier, type Notifier } from '../features/notify';
 import { useTheme, type ThemeManager } from '../features/shell';
 import { useSnapshot, useStore } from '../state/provider';
@@ -43,6 +44,10 @@ function Root({ notifier, themeManager }: RootProps) {
       themeChoice={theme.choice}
       onThemeChange={theme.setChoice}
       notifications={notifications}
+      // Only the Chat view puts a conversation on screen. With Board, Members or Admin open, a message in
+      // the conversation the store has selected is still news to the member, so the notifier is told
+      // whether Chat is the open view and nothing more: it does not know the registry's ids.
+      onOpenViewChange={(viewId) => notifier.setChatOpen(viewId === VIEW_ID.chat)}
     />
   );
 }

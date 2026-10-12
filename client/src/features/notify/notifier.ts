@@ -51,6 +51,16 @@ export interface Notifier {
   getSettings(): NotificationSettings;
   /** Calls `listener` with the new settings after each change the notifier makes: the preference, an answered prompt. */
   subscribe(listener: (settings: NotificationSettings) => void): () => void;
+  /**
+   * Tells the notifier whether the Chat view is the view the member has open. A conversation counts as
+   * in view, and a message in it stays silent while the window is focused, only while it is: with Board,
+   * Members or Admin open the selected conversation is not on screen, and the Chat view's announcements
+   * are not mounted either, so a notification is the only signal the member would get. It starts false,
+   * so that a notifier nobody has told errs towards a notification nobody needed and not towards a
+   * missing one. It takes no view id: which view shows conversations is the shell's to say (see
+   * src/wiring/root.tsx), and this feature does not import the registry.
+   */
+  setChatOpen(open: boolean): void;
   /** Stops listening to the store. The notifier is not used afterwards. */
   dispose(): void;
 }
@@ -96,8 +106,9 @@ function isIn(conversation: Conversation | undefined, place: Place): boolean {
 }
 
 /**
- * The member is looking at this conversation of this repo. The snapshot lists only the selected
- * repo's conversations and their ids are opaque, so the message is matched by who is in it.
+ * This conversation of this repo is the one the store has selected. The snapshot lists only the
+ * selected repo's conversations and their ids are opaque, so the message is matched by who is in it.
+ * Whether that selection is on screen is for `chatOpen` to say, not the store.
  */
 function inView(snapshot: StoreSnapshot, repo: string, place: Place): boolean {
   if (snapshot.selectedRepo !== repo) return false;
@@ -155,6 +166,8 @@ export function createNotifier(options: NotifierOptions): Notifier {
   const listeners = new Set<(settings: NotificationSettings) => void>();
   const lastShown = new Map<string, number>();
   let disposed = false;
+  // False until the shell says otherwise (see Notifier.setChatOpen): no conversation is assumed to be on screen.
+  let chatOpen = false;
   let enabled = readEnabled();
   let settings = build(readPermission());
   // What subscribers were last told; `settings` can move ahead of it when a read notices a new permission.
@@ -267,7 +280,10 @@ export function createNotifier(options: NotifierOptions): Notifier {
     const reason = reasonFor(message, me);
     if (reason === null) return;
     const place = placeOf(message, me);
-    if (pageIsActive() && inView(snapshot, repo, place)) return;
+    // On screen takes all three: Chat is the open view, the window is shown and focused, and the message
+    // belongs to the conversation Chat has open. The store's selection alone is not enough: it stays
+    // selected while Board, Members or Admin covers it.
+    if (chatOpen && pageIsActive() && inView(snapshot, repo, place)) return;
     const tag = tagOf(repo, place);
     const now = clock.now();
     if (throttled(tag, now)) return;
@@ -283,6 +299,10 @@ export function createNotifier(options: NotifierOptions): Notifier {
       return () => {
         listeners.delete(listener);
       };
+    },
+
+    setChatOpen(open) {
+      chatOpen = open;
     },
 
     dispose() {
