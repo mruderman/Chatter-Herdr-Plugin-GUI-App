@@ -79,6 +79,11 @@ describe('check-dist', () => {
     ['a hexadecimal character reference hiding an https URL', '<img src="&#x68;ttps://example.com/x.png">', /character reference/i],
     ['named references hiding the scheme separator', '<a href="https&colon;&sol;&sol;example.com/">x</a>', /character reference/i],
     ['a character reference in an unquoted attribute', '<a href=&#104;ttps://example.com/>x</a>', /character reference/i],
+    // The URL parser drops ASCII tabs and newlines before it reads a scheme, so `h<TAB>ttps://` is an https URL to
+    // a browser and nothing to a pattern that wants the scheme in one piece.
+    ['a tab inside a URL scheme', '<img src="h\tttps://example.com/a.png">', /control character/i],
+    ['a newline inside a URL scheme', '<img src="https:\n//example.com/a.png">', /control character/i],
+    ['a carriage return inside a URL', '<img src="ht\rtps://example.com/a.png">', /control character/i],
     // The rule is "any foreign-origin URL in index.html", so text and comments count, not only attributes.
     ['a URL in text', '<p>Docs live at https://example.com/docs</p>', /foreign-origin URL/i],
     ['a URL in a comment', '<!-- served from https://cdn.example.com/x.js -->', /foreign-origin URL/i],
