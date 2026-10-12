@@ -7,7 +7,7 @@ import { axeScan } from './harness/axe';
 import { expect, test } from './harness/fixtures';
 import { tokenLeaks } from './harness/guard';
 import { startProxy } from './harness/proxy';
-import { D15_CSP } from './harness/world';
+import { D15_CSP, worldTokens } from './harness/world';
 
 const ASSETS = '/assets/';
 const HTML = 'text/html; charset=utf-8';
@@ -138,7 +138,17 @@ test.describe('harness canaries: each guard sees what it exists to catch', () =>
       area.value = t;
     }, fake);
     expect(await tokenLeaks(page, guard, []), 'the sign-in field and a New token dialog may hold one').toEqual([]);
+
+    // Only while the Sign in view is showing. Once it is gone (the member is signed in) a field with the same
+    // label holding the token is a leak, however it got there.
     await page.evaluate(() => {
+      const heading = document.querySelector('h1');
+      if (heading) heading.textContent = 'Chat';
+    });
+    expect(await tokenLeaks(page, guard, []), 'a labelled password field once the sign-in view is gone').toEqual(['a form control\'s value outside the "New token" dialog']);
+    await page.evaluate(() => {
+      const heading = document.querySelector('h1');
+      if (heading) heading.textContent = 'Sign in';
       document.getElementById('e2e-signin')?.remove();
       document.getElementById('e2e-signin-label')?.remove();
     });
@@ -186,16 +196,20 @@ test.describe('harness canaries: each guard sees what it exists to catch', () =>
     expect(guard.pageErrorsHoldToken([]), 'the raw copy is forgotten with it').toBe(false);
   });
 
-  test('an uncaught page error fails the test that left it behind', async ({ open }) => {
-    // Marked as expected to fail: it passes only while the fixture fails it at teardown. If the fixture stops
-    // failing on page errors this test passes unexpectedly, and Playwright reports that as a failure.
-    test.fail(true, 'the fixture has to fail a test that leaves an uncaught page error behind');
+  test('an uncaught page error fails the test that left it behind', async ({ open, world }) => {
     const { page, guard } = await open();
     await page.goto('/');
     await page.evaluate(() => { setTimeout(() => { throw new Error('a canary error with no token in it'); }, 0); });
-    // Waits without asserting. If the guard stopped recording the error nothing fails here, the test passes, and
-    // test.fail() reports that as a failure: the only way to be marked as failing is the fixture's own check.
-    for (let waited = 0; guard.pageErrors.length === 0 && waited < 5_000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+    // Everything that is not the fixture's own page-error rule is settled before the test is marked as expected to
+    // fail, so that nothing else can satisfy the mark: a failed navigation, a guard that never heard the error, a
+    // CSP violation, a pointer event or a token leak each fail this test as it stands.
+    await expect.poll(() => guard.pageErrors.length, 'the guard heard the error').toBeGreaterThan(0);
+    expect(guard.cspViolations).toEqual([]);
+    expect(guard.pointerEvents).toEqual([]);
+    expect(await tokenLeaks(page, guard, worldTokens(world))).toEqual([]);
+    // From here the only thing left to fail the test is the fixture's page-error check at teardown. If the fixture
+    // stops failing on page errors this test passes unexpectedly, and Playwright reports that as a failure.
+    test.fail(true, 'the fixture has to fail a test that leaves an uncaught page error behind');
   });
 
   test('axe runs under the D15 CSP without causing a violation', async ({ open }) => {

@@ -114,7 +114,7 @@ interface PageDump {
 
 /** Storage, IndexedDB, the page's HTML and its form controls' values, minus any "New token for ..." dialog. */
 async function dumpPage(page: Page): Promise<PageDump> {
-  return page.evaluate(async ({ newTokenPrefix, signInLabel }) => {
+  return page.evaluate(async ({ newTokenPrefix, signInLabel, signInHeading }) => {
     const unreadable: string[] = [];
     const storage: string[] = [];
     for (const [name, area] of [['localStorage', () => window.localStorage], ['sessionStorage', () => window.sessionStorage]] as const) {
@@ -172,10 +172,15 @@ async function dumpPage(page: Page): Promise<PageDump> {
 
     // A form control's live value is not HTML, so the walk never sees it. The sign-in field holds the token
     // until sign-in succeeds (ui-contract section 1) and a "New token" dialog holds a new one: those two are
-    // exempt. The sign-in field is found by its label, not by its type, so that a second password input
-    // holding the token, left behind after sign-in, is still a leak.
+    // exempt. The sign-in field is found by its label, not by its type, and only while the Sign in view is on
+    // the page: once the member is signed in nothing may hold the token, however it is labelled, so a second
+    // password input (or a copy of the field) left behind after sign-in is still a leak.
+    const signInShowing = Array.from(document.querySelectorAll('h1')).some((heading) => (heading.textContent ?? '').trim() === signInHeading);
     const isSignInField = (el: Element): boolean =>
-      el instanceof HTMLInputElement && el.type === 'password' && Array.from(el.labels ?? []).some((label) => (label.textContent ?? '').trim() === signInLabel);
+      signInShowing
+      && el instanceof HTMLInputElement
+      && el.type === 'password'
+      && Array.from(el.labels ?? []).some((label) => (label.textContent ?? '').trim() === signInLabel);
     const values: string[] = [];
     for (const el of Array.from(document.querySelectorAll('input, textarea, select'))) {
       if ([...exempt].some((d) => d.contains(el))) continue;
@@ -183,7 +188,7 @@ async function dumpPage(page: Page): Promise<PageDump> {
       if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) values.push(el.value);
     }
     return { storage: storage.join('\n'), indexedDb: idb.join('\n'), dom: dom.join('\n'), values: values.join('\n'), unreadable };
-  }, { newTokenPrefix: UI.admin.newTokenPrefix, signInLabel: UI.signIn.token });
+  }, { newTokenPrefix: UI.admin.newTokenPrefix, signInLabel: UI.signIn.token, signInHeading: UI.signIn.heading });
 }
 
 /**
