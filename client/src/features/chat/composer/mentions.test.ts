@@ -65,9 +65,10 @@ describe('mentionCandidates: who is offered (ui-contract section 3)', () => {
     expect(offered).not.toContain('everyone (all members)');
   });
 
-  it('follows can_address_agents for an admin too, as the contract words it', () => {
+  it('offers agents to an admin even without can_address_agents, because the bridge lets an admin address them', () => {
+    // bridge/src/policy.js refuses agents only when the sender is neither an admin nor allowed.
     const offered = labels(mentionCandidates({ ...admin, can_address_agents: false }, directory));
-    expect(offered).not.toContain('codex (Agent)');
+    expect(offered).toContain('codex (Agent)');
     expect(offered).toContain('everyone (all members)');
   });
 

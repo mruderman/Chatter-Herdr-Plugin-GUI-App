@@ -27,8 +27,8 @@ export function mentionCandidates(me: Me, directory: Directory | null): MentionC
   const members = (directory?.members ?? [])
     .filter((member) => member.handle !== me.handle)
     .map((member) => ({ value: member.handle, label: `${member.handle} (${MEMBER_KIND_LABEL[member.kind]})` }));
-  // The contract ties agents to can_address_agents alone, even for an admin the bridge would let through.
-  const agents = me.can_address_agents
+  // The bridge lets an admin address agents whatever the flag says (bridge/src/policy.js), so an admin is offered them too.
+  const agents = me.role === ADMIN || me.can_address_agents
     ? (directory?.agents ?? []).map((name) => ({ value: name, label: `${name} (${AGENT_KIND_LABEL})` }))
     : [];
   const everyone = me.role === ADMIN ? [{ value: EVERYONE, label: EVERYONE_LABEL }] : [];

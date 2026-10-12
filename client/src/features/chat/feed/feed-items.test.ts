@@ -173,4 +173,27 @@ describe('labels: Mentions you, Direct message, Admin view', () => {
   it('no DM label in #chat', () => {
     expect(labelsOf(message('mira', '2026-10-10T15:00:00Z'))).toEqual([]);
   });
+
+  // ui-contract section 8, "@everyone outside the channel": a mention counts only in #chat for
+  // @everyone, and never on the member's own message.
+  it('nothing on the member\'s own message, whether it uses @everyone or names the member', () => {
+    expect(labelsOf(message('thom', '2026-10-10T15:00:00Z', { everyone: true }))).toEqual([]);
+    expect(labelsOf(message('thom', '2026-10-10T15:00:00Z', { mentions: ['thom'] }))).toEqual([]);
+    expect(labelsOf(message('flan', '2026-10-10T15:00:00Z', { everyone: true }), { me: 'flan' })).toEqual([]);
+  });
+
+  it('@everyone in a DM is plain text: "Direct message" alone', () => {
+    const dm = message('mira', '2026-10-10T15:00:00Z', { to: 'thom', everyone: true });
+    expect(labelsOf(dm, { conversationKind: 'direct' })).toEqual(['Direct message']);
+  });
+
+  it('@everyone in a DM between two others is plain text for the admin too: "Admin view" alone', () => {
+    const dm = message('mira', '2026-10-10T15:00:00Z', { to: 'thom', everyone: true });
+    expect(labelsOf(dm, { conversationKind: 'observed', me: 'flan' })).toEqual(['Admin view']);
+  });
+
+  it('a mention of the member by handle still counts in a DM', () => {
+    const dm = message('mira', '2026-10-10T15:00:00Z', { to: 'thom', mentions: ['thom'] });
+    expect(labelsOf(dm, { conversationKind: 'direct' })).toEqual(['Mentions you', 'Direct message']);
+  });
 });

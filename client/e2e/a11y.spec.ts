@@ -7,20 +7,24 @@ import { seriousViolations } from './harness/axe';
 import { expect, openChat, signIn, test } from './harness/fixtures';
 import { UI, ui } from './harness/ui';
 
-const THEMES: ReadonlyArray<{ theme: string; media: BrowserContextOptions }> = [
-  { theme: UI.theme.light, media: { colorScheme: 'light', contrast: 'no-preference' } },
-  { theme: UI.theme.dark, media: { colorScheme: 'dark', contrast: 'no-preference' } },
-  { theme: UI.theme.hc, media: { colorScheme: 'light', contrast: 'more' } },
+// While the theme choice is "System", as in a fresh browser, <html> has no data-theme and the media
+// queries pick the tokens (ui-contract section 8). So the theme a scan ran in is read from what the page
+// shows: the body's background, which is that theme's --color-bg (src/styles/tokens.css), compared as
+// the browser resolves it, so however the build spells the colour does not matter.
+const THEMES: ReadonlyArray<{ theme: string; media: BrowserContextOptions; background: string }> = [
+  { theme: UI.theme.light, media: { colorScheme: 'light', contrast: 'no-preference' }, background: 'rgb(243, 245, 247)' },
+  { theme: UI.theme.dark, media: { colorScheme: 'dark', contrast: 'no-preference' }, background: 'rgb(14, 18, 22)' },
+  { theme: UI.theme.hc, media: { colorScheme: 'light', contrast: 'more' }, background: 'rgb(0, 0, 0)' },
 ];
 // Anything longer than this counts as motion; 0.01 ms is the common "reduce to nothing" idiom.
 const MAX_MOTION_SECONDS = 0.00001;
 
-for (const { theme, media } of THEMES) {
+for (const { theme, media, background } of THEMES) {
   test(`plan gate, axe (SPEC section 7, ui-contract section 6): no serious or critical violations on every view and an open dialog, theme "${theme}"`, async ({ open, world }) => {
     const { page } = await open({ context: media });
-    const html = page.locator('html');
+    const body = page.locator('body');
     const scan = async (state: string): Promise<void> => {
-      await expect.soft(html, `data-theme while scanning ${state}`).toHaveAttribute('data-theme', theme);
+      await expect.soft(body, `the "${theme}" theme is showing while scanning ${state}`).toHaveCSS('background-color', background);
       expect.soft(await seriousViolations(page), `${theme}: ${state}`).toEqual([]);
     };
 

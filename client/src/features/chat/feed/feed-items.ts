@@ -1,7 +1,7 @@
 // What the feed shows, in order: a heading for each local day, the "New messages" separator once,
 // and each message with its time, its labels and whether it starts a group. Kept pure so grouping,
 // day boundaries and labels are tested without a DOM.
-import type { Message } from '../../../api/types';
+import { CHANNEL, type Message } from '../../../api/types';
 import type { Conversation } from '../../../state/types';
 
 /** ui-contract section 3: consecutive messages from one sender within 5 minutes share one header. */
@@ -104,11 +104,21 @@ function continuesGroup(previous: Message, message: Message): boolean {
   return gap >= 0 && gap <= GROUP_WINDOW_MS;
 }
 
+/**
+ * Whether the message mentions the signed-in member (ui-contract section 8). Never their own message.
+ * Handles are lowercase (bridge/src/util.js HANDLE_RE) and the bridge lowercases every mention, so
+ * plain equality is exact. The bridge sets `everyone` from the text of any message, but only a post
+ * to #chat reaches everyone: in a DM the bridge's policy writes it false and Chatter expands it only
+ * in its channel post, so there it is plain text. The notifier (features/notify) applies the same rule.
+ */
+function mentionsMember(message: Message, me: string): boolean {
+  if (message.from === me) return false;
+  return message.mentions.includes(me) || (message.everyone && message.to === CHANNEL);
+}
+
 function labelsFor(message: Message, me: string | null, kind: Conversation['kind'] | null): MessageLabel[] {
   const labels: MessageLabel[] = [];
-  // Handles are lowercase (bridge/src/util.js HANDLE_RE) and the bridge lowercases every mention, so
-  // plain equality is exact. `everyone` reaches every member, the signed-in one included.
-  if (me !== null && (message.everyone || message.mentions.includes(me))) labels.push(MESSAGE_LABEL.mentionsYou);
+  if (me !== null && mentionsMember(message, me)) labels.push(MESSAGE_LABEL.mentionsYou);
   if (kind === 'direct') labels.push(MESSAGE_LABEL.direct);
   if (kind === 'observed') labels.push(MESSAGE_LABEL.adminView);
   return labels;

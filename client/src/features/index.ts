@@ -1,5 +1,7 @@
-// The view registry: what the primary navigation lists and what <main> shows for each entry.
-// Each feature task swaps its stub for the real view; the integration task connects the store.
+// The view registry: what the primary navigation lists and what <main> shows for each entry. These are
+// the shell's own entries, with placeholder views that need no store, so the shell renders and is
+// tested on its own. The running app passes App the same entries with the real views, connected to
+// the store, from src/wiring/views.tsx.
 import type { ComponentType } from 'preact';
 import { createStubView } from './shell/stub-views';
 

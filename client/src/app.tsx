@@ -22,10 +22,32 @@ export interface AppProps {
   onThemeChange: (choice: ThemeChoice) => void;
   /** Left out until the notifications feature is connected; Settings then has no notification section. */
   notifications?: NotificationSettings;
-  /** The registry to show; defaults to the app's own. Tests pass a smaller one. */
+  /**
+   * The registry to show. Defaults to the shell's own, whose views are placeholders that need no store;
+   * the running app passes the real views (src/wiring/views.tsx), and tests pass a smaller one.
+   */
   views?: readonly ViewDefinition[];
   /** The view shown after sign-in; defaults to the first entry of the registry, which is Chat. */
   defaultViewId?: ViewId;
+}
+
+/**
+ * How many times this App has seen the session turn signed-in. It moves during the render that first
+ * shows the new session, so that render already knows a choice made in an earlier session is stale.
+ * Comparing with the last status seen keeps it from moving twice for one sign-in.
+ */
+function useSignInCount(status: ShellSession['status']): number {
+  const seen = useRef({ status, count: 0 });
+  if (seen.current.status !== status) {
+    seen.current = { status, count: status === 'signed-in' ? seen.current.count + 1 : seen.current.count };
+  }
+  return seen.current.count;
+}
+
+/** The view the member opened, and in which sign-in they opened it. */
+interface ViewChoice {
+  readonly signIn: number;
+  readonly viewId: ViewId | undefined;
 }
 
 // Composes the shell from props. It owns only what is purely about the screen (which view is open,
@@ -33,15 +55,17 @@ export interface AppProps {
 export function App({ session, themeChoice, onThemeChange, notifications, views = VIEWS, defaultViewId }: AppProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const startView = defaultViewId ?? views[0]?.id;
-  const [viewId, setViewId] = useState<ViewId | undefined>(startView);
+  const signIn = useSignInCount(session.status);
+  const [choice, setChoice] = useState<ViewChoice>(() => ({ signIn, viewId: startView }));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Every sign-in starts at the default view, whatever was open in an earlier session. Decided here, in
+  // the render, rather than reset afterwards: a reset after the commit would mount the old view first.
+  const viewId = choice.signIn === signIn ? choice.viewId : startView;
 
   const previousStatus = useRef(session.status);
   useLayoutEffect(() => {
     if (previousStatus.current === session.status) return;
     previousStatus.current = session.status;
-    // Every sign-in starts at the default view, whatever was open in an earlier session.
-    if (session.status === 'signed-in') setViewId(startView);
     // When the sign-in form disappears the focused field goes with it and focus falls back to <body>,
     // where the browser may continue from wherever the field was. Putting it on the root first makes
     // the next Tab reach the first skip link, which is what the contract lists as the first tab stop.
@@ -90,7 +114,7 @@ export function App({ session, themeChoice, onThemeChange, notifications, views 
           currentId={current.id}
           onNavigate={(id) => {
             const next = visibleViews.find((view) => view.id === id);
-            if (next) setViewId(next.id);
+            if (next) setChoice({ signIn, viewId: next.id });
           }}
         />
       )}
