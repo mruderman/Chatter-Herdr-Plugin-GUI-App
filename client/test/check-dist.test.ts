@@ -49,6 +49,12 @@ describe('check-dist', () => {
     expect(result.code).toBe(0);
   });
 
+  it('accepts a character reference in text, which cannot hide the value of an attribute', () => {
+    const result = check(page('<p>Fish &amp; chips</p>'));
+    expect(result.output).toMatch(/check:dist.*OK/);
+    expect(result.code).toBe(0);
+  });
+
   const violations: Array<[string, string, RegExp]> = [
     ['an inline script body', '<script>window.boot = 1</script>', /inline script/i],
     ['an inline module script body', '<script type="module">import "/assets/x.js"</script>', /inline script/i],
@@ -67,6 +73,12 @@ describe('check-dist', () => {
     ['a data URI', '<img src="data:image/png;base64,AAAA">', /foreign-origin URL/i],
     ['a javascript URI', '<a href="javascript:void(0)">x</a>', /foreign-origin URL/i],
     ['a URL inside a meta refresh', '<meta http-equiv="refresh" content="0;url=https://example.com/">', /foreign-origin URL/i],
+    // A browser decodes character references before it reads the URL, and this check does not, so one in an
+    // attribute value could hide any rule above: it is a failure of its own, whatever it spells.
+    ['a numeric character reference hiding an https URL', '<img src="&#104;ttps://example.com/x.png">', /character reference/i],
+    ['a hexadecimal character reference hiding an https URL', '<img src="&#x68;ttps://example.com/x.png">', /character reference/i],
+    ['named references hiding the scheme separator', '<a href="https&colon;&sol;&sol;example.com/">x</a>', /character reference/i],
+    ['a character reference in an unquoted attribute', '<a href=&#104;ttps://example.com/>x</a>', /character reference/i],
     // The rule is "any foreign-origin URL in index.html", so text and comments count, not only attributes.
     ['a URL in text', '<p>Docs live at https://example.com/docs</p>', /foreign-origin URL/i],
     ['a URL in a comment', '<!-- served from https://cdn.example.com/x.js -->', /foreign-origin URL/i],

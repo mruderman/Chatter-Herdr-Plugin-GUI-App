@@ -1,5 +1,6 @@
 // Fails the build when dist/index.html holds anything the bridge's CSP (D15) blocks or could let slip
-// past it: inline scripts or styles, style and event-handler attributes, and any foreign-origin URL.
+// past it: inline scripts or styles, style and event-handler attributes, any foreign-origin URL, and a
+// character reference in an attribute value (this scan does not decode them, so one could hide a URL).
 // It reads index.html only; dist/assets/* is bundler output and is not read here.
 //
 // Usage: node scripts/check-dist.mjs [distDir]   (default: ../dist next to this script)
@@ -54,6 +55,12 @@ function scan(html) {
     for (const attribute of attributes) {
       if (attribute.name === 'style') problems.push(`style attribute on <${name}>`);
       if (EVENT_HANDLER.test(attribute.name)) problems.push(`event-handler attribute ${attribute.name} on <${name}>`);
+      // A browser decodes character references before it reads a URL (`&#104;ttps://...`, `https&colon;//...`)
+      // and this scan does not, so one in an attribute value could hide any URL rule below. Vite writes none
+      // into index.html, so one is a failure rather than something to decode: there are more than 2,000 names.
+      if (attribute.value.includes('&')) {
+        problems.push(`character reference in ${attribute.name}="${shown(attribute.value)}" on <${name}>`);
+      }
       if (ESCAPING_ATTRIBUTE_URL.test(attribute.value)) {
         problems.push(`foreign-origin URL in ${attribute.name}="${shown(attribute.value)}" on <${name}>`);
       }
