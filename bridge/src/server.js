@@ -186,6 +186,13 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
     return { id: result.id, pushed, warnings, mentioned_members: decision.memberTargets, delivery };
   }
 
+  // The agent-row keys of Chatter 0.19.0 (`cmdAgents`) that are not host paths. An allowlist, not a
+  // denylist of cwd and repo_root: a column a later Chatter adds fails closed until someone judges it safe.
+  const MEMBER_AGENT_KEYS = new Set([
+    'name', 'pane_id', 'workspace_id', 'branch', 'kind', 'role',
+    'registered_at', 'last_seen_at', 'departed_at', 'status', 'task',
+  ]);
+
   async function getBoard(member, key) {
     const repo = await host.repo(key);
     const out = boardTables(host.openRO(repo));
@@ -200,6 +207,9 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
         else agents_error = (r.stderr || '').trim().split('\n').pop() || `exit ${r.code}`;
       } catch (e) { agents_error = e.message; }
     }
+    // Host paths are admin only, as in /v1/repos. The cache is shared across roles and `agents` may be the
+    // cached array itself, so build new rows instead of deleting from them.
+    if (member.role !== 'admin') agents = agents.map((row) => Object.fromEntries(Object.entries(row).filter(([k]) => MEMBER_AGENT_KEYS.has(k))));
     return { repo: repo.key, epoch: host.epoch(repo), agents, agents_error, ...out };
   }
 

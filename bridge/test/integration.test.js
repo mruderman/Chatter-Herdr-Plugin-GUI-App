@@ -1,6 +1,8 @@
 // Contract tests: the bridge against the real Chatter CLI (no Herdr running).
 // Set CHATTER_JS to the built Chatter entry point (dist/bin/chatter.js).
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { after, before, describe, test } from 'node:test';
 import { haveChatter, makeEnv, openSse } from './helpers.js';
 
@@ -193,6 +195,107 @@ describe('bridge against Chatter CLI', { skip: !haveChatter && 'set CHATTER_JS t
     assert.equal(repos[0].last_read_id, max);
     assert.equal(repos[0].repo_root, null, 'repo paths are admin only');
     assert.ok((await e.api('flan', 'GET', '/v1/repos')).body.repos[0].repo_root);
+  });
+
+  // F15. Own env: the bridge caches the CLI's agent rows for 2 s, so rows seeded after an earlier
+  // board request in the shared env could be hidden by a stale (empty) cache entry.
+  test('board agent rows carry no host paths for a non-admin; an admin keeps them; the shared cache leaks neither way', async () => {
+    const x = await makeEnv();
+    try {
+      x.addMember('grace');
+      x.seedAgent('codex-1');
+      // seedAgent leaves cwd null; give it a real value so a leaked value cannot hide behind null.
+      const cwd = path.join(x.repo, 'packages', 'app');
+      const db = new DatabaseSync(path.join(x.repoInfo.dir, 'chatter.db'));
+      db.prepare('UPDATE agents SET cwd = ? WHERE name = ?').run(cwd, 'codex-1');
+      db.close();
+
+      const board = async (who) => {
+        const r = await x.api(who, 'GET', `/v1/repos/${x.key}/board`);
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(r.body.agents_error, null);
+        assert.ok(r.body.agents.length >= 1, 'the seeded agent is listed');
+        return r;
+      };
+      const seen = (who, r) => {
+        const row = r.body.agents.find((a) => a.name === 'codex-1');
+        assert.ok(row, `${who} sees codex-1`);
+        return row;
+      };
+      const asMember = (r) => {
+        for (const a of r.body.agents) {
+          assert.equal('repo_root' in a, false, 'repo_root key is absent for a non-admin');
+          assert.equal('cwd' in a, false, 'cwd key is absent for a non-admin');
+        }
+        const row = seen('grace', r);
+        assert.equal(row.kind, 'codex', 'the other fields survive');
+        assert.equal(row.status, 'offline');
+        assert.ok(row.registered_at);
+        assert.ok(!JSON.stringify(r.body).includes(x.root), 'no host path anywhere in the response');
+      };
+      const asAdmin = (r) => {
+        const row = seen('flan', r);
+        assert.equal(row.repo_root, x.repo);
+        assert.equal(row.cwd, cwd);
+      };
+
+      // The first request fills the cache; the rest are served from it. The order covers rows
+      // redacted before caching, redacted in place, and redaction skipped on a cache hit.
+      asMember(await board('grace'));
+      asAdmin(await board('flan'));
+      asMember(await board('grace'));
+      asAdmin(await board('flan'));
+    } finally { await x.stop(); }
+  });
+
+  // A column a later Chatter adds must not reach a non-admin until someone has judged it safe.
+  test('board agent rows for a non-admin keep only known non-path keys; an admin\'s rows are untouched', async () => {
+    const x = await makeEnv();
+    try {
+      x.addMember('grace');
+      const row = {
+        name: 'codex-1', pane_id: 'w1:2', workspace_id: 'w1', cwd: '/srv/work/app', repo_root: '/srv/work',
+        worktree_path: '/srv/work/.wt/codex-1', branch: 'main', kind: 'codex', role: 'reviewer',
+        registered_at: '2026-10-09 00:00:00', last_seen_at: '2026-10-09 00:00:00', departed_at: null,
+        status: 'offline', task: { assignee: 'codex-1', id: 't1', title: 'review' },
+      };
+      const sparse = { name: 'codex-2', repo_root: '/srv/work', worktree_path: '/srv/work/.wt/codex-2' };
+      const realRun = x.host.run.bind(x.host);
+      // Stub only `chatter agents`, with rows the installed Chatter does not produce.
+      x.host.run = (o) => (o.args[0] === 'agents'
+        ? Promise.resolve({ code: 0, stdout: JSON.stringify([row, sparse]), stderr: '' })
+        : realRun(o));
+      const { repo_root, cwd, worktree_path, ...kept } = row;
+      const board = async (who) => (await x.api(who, 'GET', `/v1/repos/${x.key}/board`)).body.agents;
+      // grace first fills the cache; flan and the second grace are served from it.
+      assert.deepEqual(await board('grace'), [kept, { name: 'codex-2' }], 'keys absent in a row stay absent, none are added as null');
+      assert.deepEqual(await board('flan'), [row, sparse], 'an admin gets the rows exactly as Chatter printed them');
+      assert.deepEqual(await board('grace'), [kept, { name: 'codex-2' }]);
+    } finally { await x.stop(); }
+  });
+
+  test('board agents_error is the same for a member and an admin', async () => {
+    const x = await makeEnv();
+    try {
+      x.addMember('grace');
+      const realRun = x.host.run.bind(x.host);
+      let fail = null;
+      // Stub only `chatter agents`; the repo lookup and everything else still use the real CLI.
+      x.host.run = (o) => (o.args[0] === 'agents' && fail ? fail() : realRun(o));
+      const cases = [
+        ['a non-zero exit', () => Promise.resolve({ code: 1, stdout: '', stderr: 'agents failed\n' }), 'agents failed'],
+        ['a spawn error', () => Promise.reject(new Error('could not start chatter')), 'could not start chatter'],
+      ];
+      for (const [name, stub, message] of cases) {
+        fail = stub;
+        for (const who of ['grace', 'flan']) {
+          const r = await x.api(who, 'GET', `/v1/repos/${x.key}/board`);
+          assert.equal(r.status, 200, `${name} as ${who}`);
+          assert.deepEqual(r.body.agents, [], `${name} as ${who}`);
+          assert.equal(r.body.agents_error, message, `${name} as ${who}`);
+        }
+      }
+    } finally { await x.stop(); }
   });
 
   test('rate limit answers 429', async () => {
