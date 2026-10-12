@@ -148,8 +148,10 @@ export interface Store {
   markRead(): Promise<void>;
   /**
    * Fetches the directory again, so a member added, changed or revoked elsewhere (the admin panel)
-   * shows in the To select and @-completion. A failure keeps the old directory, and the promise
-   * still resolves. Does nothing when signed out.
+   * shows in the To select and @-completion. The promise resolves after a request that started after
+   * the call: a call may share a request that is queued behind the one running, never the running one,
+   * which may have been answered before the change the caller has just made. A failure keeps the old
+   * directory, and the promise still resolves. Does nothing when signed out.
    */
   refreshDirectory(): Promise<void>;
   /** Stops streams and timers. The store is not used afterwards. */
