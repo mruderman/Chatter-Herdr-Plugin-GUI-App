@@ -1,6 +1,6 @@
 // The specs' shared fixtures. `open` gives each simulated member a separate browser context with the
-// guards attached, and when the test ends it fails the test on any CSP violation or token leak in any
-// page the test opened, whether the test itself passed or not.
+// guards attached, and when the test ends it fails the test on any CSP violation, uncaught page error or
+// token leak in any page the test opened, whether the test itself passed or not.
 import { test as base, expect, type BrowserContext, type BrowserContextOptions, type Page } from '@playwright/test';
 import { Guard, redact, tokenLeaks } from './guard';
 import { UI, ui } from './ui';
@@ -38,7 +38,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
   world: [async ({}, use) => {
     await use(readWorld());
   }, { scope: 'worker' }],
-  open: async ({ browser, world }, use, testInfo) => {
+  open: async ({ browser, world }, use) => {
     const opened: Array<{ o: Opened; hygiene: boolean }> = [];
     await use(async (options = {}) => {
       const context = await browser.newContext({ ...options.context, baseURL: options.baseURL ?? world.baseURL });
@@ -55,13 +55,15 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
       const which = `browser ${i + 1}`;
       for (const v of o.guard.cspViolations) problems.push(`${which}: CSP violation: ${v}`);
       for (const p of o.guard.pointerEvents) problems.push(`${which}: pointer event in a keyboard-only run: ${p}`);
-      for (const e of o.guard.pageErrors) testInfo.annotations.push({ type: 'page error', description: `${which}: ${e}` });
+      // An uncaught error is a bug the selected assertions may never touch, so it fails the test (the guard
+      // has already redacted anything token-shaped; a spec that throws on purpose hands the error back first).
+      for (const e of o.guard.pageErrors) problems.push(`${which}: uncaught page error: ${e}`);
       if (!hygiene) continue;
       const leaks = await tokenLeaks(o.page, o.guard, secrets).catch((e: unknown) => [`(check failed: ${redact(String(e))})`]);
       for (const where of leaks) problems.push(`${which}: token found in ${where}`);
     }
     await Promise.all(opened.map(({ o }) => o.context.close()));
-    expect(problems, 'CSP violations, pointer events under the tripwire, and token leaks in the browsers this test opened').toEqual([]);
+    expect(problems, 'CSP violations, pointer events under the tripwire, uncaught page errors and token leaks in the browsers this test opened').toEqual([]);
   },
 });
 

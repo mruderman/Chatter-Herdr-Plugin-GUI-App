@@ -100,6 +100,30 @@ test.describe('harness canaries: each guard sees what it exists to catch', () =>
     expect(await tokenLeaks(page, guard, [])).toEqual(['the page outside the "New token" dialog']);
     await page.evaluate(() => document.getElementById('e2e-planted')?.remove());
 
+    // A form control's value is a property, not HTML, so the walk above never reads it. It is read on its own:
+    // the sign-in field (type=password) and anything inside a "New token" dialog are the exemptions.
+    await page.evaluate((t) => {
+      const input = document.createElement('input');
+      input.id = 'e2e-field';
+      document.body.append(input);
+      input.value = t;
+    }, fake);
+    expect(await tokenLeaks(page, guard, [])).toEqual(['a form control\'s value outside the "New token" dialog']);
+    await page.evaluate(() => document.getElementById('e2e-field')?.remove());
+
+    await page.evaluate((t) => {
+      const signIn = document.createElement('input');
+      signIn.type = 'password';
+      signIn.id = 'e2e-signin';
+      document.body.append(signIn);
+      signIn.value = t;
+      const area = document.createElement('textarea');
+      document.querySelector('[role="dialog"]')?.append(area);
+      area.value = t;
+    }, fake);
+    expect(await tokenLeaks(page, guard, []), 'the sign-in field and a New token dialog may hold one').toEqual([]);
+    await page.evaluate(() => document.getElementById('e2e-signin')?.remove());
+
     await page.evaluate((t) => sessionStorage.setItem('e2e', t), fake);
     expect(await tokenLeaks(page, guard, [])).toEqual(['localStorage or sessionStorage']);
     await page.evaluate(() => sessionStorage.clear());
@@ -124,6 +148,32 @@ test.describe('harness canaries: each guard sees what it exists to catch', () =>
 
     await page.evaluate((t) => fetch(`/healthz?planted=${t}`).then((r) => r.status), fake);
     await expect.poll(async () => tokenLeaks(page, guard, [])).toEqual(['a requested URL', 'console output']);
+  });
+
+  test('the token-hygiene check finds a token in an uncaught page error, and what the guard keeps for display is redacted', async ({ open }) => {
+    // Throws on purpose, so the fixture's end-of-test checks are off for it and the error is handed back below.
+    const { page, guard } = await open({ skipHygiene: true });
+    await page.goto('/');
+    const fake = `cb_${'R'.repeat(43)}`;
+    expect(await tokenLeaks(page, guard, [])).toEqual([]);
+
+    await page.evaluate((t) => { setTimeout(() => { throw new Error(`request failed with ${t}`); }, 0); }, fake);
+    await expect.poll(async () => tokenLeaks(page, guard, [])).toContain('an uncaught page error');
+
+    const shown = guard.takePageErrors();
+    expect(shown.length, 'the error was recorded').toBeGreaterThan(0);
+    expect(shown.some((line) => line.includes(fake)), 'what is printed or annotated is redacted').toBe(false);
+    expect(guard.pageErrors, 'handed back and forgotten').toEqual([]);
+  });
+
+  test('an uncaught page error fails the test that left it behind', async ({ open }) => {
+    // Marked as expected to fail: it passes only while the fixture fails it at teardown. If the fixture stops
+    // failing on page errors this test passes unexpectedly, and Playwright reports that as a failure.
+    test.fail(true, 'the fixture has to fail a test that leaves an uncaught page error behind');
+    const { page, guard } = await open();
+    await page.goto('/');
+    await page.evaluate(() => { setTimeout(() => { throw new Error('a canary error with no token in it'); }, 0); });
+    await expect.poll(() => guard.pageErrors.length).toBeGreaterThan(0);
   });
 
   test('axe runs under the D15 CSP without causing a violation', async ({ open }) => {

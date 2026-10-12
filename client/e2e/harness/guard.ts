@@ -55,6 +55,8 @@ export class Guard {
   readonly consoleLines: string[] = [];
   readonly requestUrls: string[] = [];
   readonly pageErrors: string[] = [];
+  // The same errors before redaction: only ever searched for a token, never printed or annotated.
+  private readonly rawPageErrors: string[] = [];
 
   static async attach(context: BrowserContext, { tripwire = false }: { tripwire?: boolean } = {}): Promise<Guard> {
     const guard = new Guard();
@@ -71,8 +73,23 @@ export class Guard {
       if (CSP_CONSOLE.test(text)) guard.cspViolations.push(`console: ${redact(text).slice(0, 200)}`);
     });
     context.on('request', (r) => { guard.requestUrls.push(r.url()); });
-    context.on('weberror', (e) => { guard.pageErrors.push(redact(String(e.error()))); });
+    context.on('weberror', (e) => {
+      const text = String(e.error());
+      guard.rawPageErrors.push(text);
+      guard.pageErrors.push(redact(text));
+    });
     return guard;
+  }
+
+  /** Whether an uncaught page error carried a token, a known one or anything shaped like one. */
+  pageErrorsHoldToken(known: readonly string[]): boolean {
+    return this.rawPageErrors.some((text) => TOKEN_SHAPE.test(text) || known.some((t) => text.includes(t)));
+  }
+
+  /** Hands back and forgets the page errors seen so far (the canary throws one on purpose). */
+  takePageErrors(): string[] {
+    this.rawPageErrors.length = 0;
+    return this.pageErrors.splice(0);
   }
 
   /** Hands back and forgets the violations seen so far (the CSP canary plants one on purpose). */
@@ -90,10 +107,12 @@ interface PageDump {
   storage: string;
   indexedDb: string;
   dom: string;
+  /** What form controls hold, which is a property and not part of the HTML. */
+  values: string;
   unreadable: string[];
 }
 
-/** Storage, IndexedDB and the page's HTML, minus any "New token for ..." dialog. */
+/** Storage, IndexedDB, the page's HTML and its form controls' values, minus any "New token for ..." dialog. */
 async function dumpPage(page: Page): Promise<PageDump> {
   return page.evaluate(async (newTokenPrefix) => {
     const unreadable: string[] = [];
@@ -138,8 +157,7 @@ async function dumpPage(page: Page): Promise<PageDump> {
       const name = (d.getAttribute('aria-label') ?? labelledBy).trim();
       if (name.startsWith(newTokenPrefix)) exempt.add(d);
     }
-    // The page's HTML: text, comments and attributes. A form control's live value is not HTML, and the
-    // sign-in field holds the token there until sign-in succeeds (ui-contract section 1).
+    // The page's HTML: text, comments and attributes.
     const dom: string[] = [];
     const walk = (node: Node): void => {
       if (exempt.has(node)) return;
@@ -151,13 +169,23 @@ async function dumpPage(page: Page): Promise<PageDump> {
       for (const c of Array.from(node.childNodes)) walk(c);
     };
     walk(document.documentElement);
-    return { storage: storage.join('\n'), indexedDb: idb.join('\n'), dom: dom.join('\n'), unreadable };
+
+    // A form control's live value is not HTML, so the walk never sees it. The sign-in field holds the token
+    // until sign-in succeeds (ui-contract section 1, type=password), and a "New token" dialog holds a new one.
+    const values: string[] = [];
+    for (const el of Array.from(document.querySelectorAll('input, textarea, select'))) {
+      if ([...exempt].some((d) => d.contains(el))) continue;
+      if (el instanceof HTMLInputElement && el.type === 'password') continue;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) values.push(el.value);
+    }
+    return { storage: storage.join('\n'), indexedDb: idb.join('\n'), dom: dom.join('\n'), values: values.join('\n'), unreadable };
   }, UI.admin.newTokenPrefix);
 }
 
 /**
- * Where a token turned up, by channel name only (never the value): requested URLs, console output,
- * localStorage, sessionStorage, IndexedDB, and the page outside the admin's "New token" dialog.
+ * Where a token turned up, by channel name only (never the value): requested URLs, console output, uncaught
+ * page errors, localStorage, sessionStorage, IndexedDB, the page outside the admin's "New token" dialog, and
+ * the value of a form control outside it (the sign-in field aside).
  */
 export async function tokenLeaks(page: Page, guard: Guard, secrets: readonly string[]): Promise<string[]> {
   const known = secrets.filter((s) => s.length > 0);
@@ -165,11 +193,13 @@ export async function tokenLeaks(page: Page, guard: Guard, secrets: readonly str
   const found: string[] = [];
   if (guard.requestUrls.some(leaks)) found.push('a requested URL');
   if (guard.consoleLines.some(leaks)) found.push('console output');
+  if (guard.pageErrorsHoldToken(known)) found.push('an uncaught page error');
   if (page.isClosed()) return found;
   const dump = await dumpPage(page);
   if (leaks(dump.storage)) found.push('localStorage or sessionStorage');
   if (leaks(dump.indexedDb)) found.push('IndexedDB');
   if (leaks(dump.dom)) found.push('the page outside the "New token" dialog');
+  if (leaks(dump.values)) found.push('a form control\'s value outside the "New token" dialog');
   for (const u of dump.unreadable) found.push(`could not read ${u}`);
   return found;
 }
