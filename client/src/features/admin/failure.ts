@@ -23,14 +23,22 @@ export function describeFailure(error: unknown): string {
  * of its own codes. An answer that is not its error shape (a proxy's 502, or any other page) carries the
  * client's `unexpected_status`, and the proxy may have forwarded the request before it failed.
  */
-function isRefusal(error: unknown): boolean {
+export function isRefusal(error: unknown): boolean {
   return error instanceof ApiError && error.status < FIRST_SERVER_ERROR && error.code !== CLIENT_ERROR_CODES.unexpectedStatus;
+}
+
+// The hint after a message is a sentence of its own, so the message must end with one of these marks,
+// or the two run together on screen and aloud.
+const SENTENCE_END = /[.!?]$/;
+
+function endSentence(message: string): string {
+  return SENTENCE_END.test(message) ? message : `${message}.`;
 }
 
 /** Every failure that is not such a refusal leaves open whether the change was made. */
 export function describeChangeFailure(error: unknown): string {
   const message = describeFailure(error);
-  return isRefusal(error) ? message : `${message} ${MAYBE_DONE}`;
+  return isRefusal(error) ? message : `${endSentence(message)} ${MAYBE_DONE}`;
 }
 
 /** The bridge says admins only (403): the member is not an admin, however they got here. */

@@ -243,7 +243,8 @@ describe.skipIf(!HAVE_CHATTER)('the Admin view against the real bridge and Chatt
     const direct = await env.api('flan', 'PATCH', '/v1/members/bo', { tailscale_login: 'ana@example.com' });
     expect(direct.status).toBe(500);
     const bridgeSays = errorOf(direct).message ?? '';
-    expect(bridgeSays).not.toBe('');
+    // The catch-all of bridge/src/server.js. It ends with no mark, so the page adds a full stop before the hint.
+    expect(bridgeSays).toBe('internal error');
 
     const { user, refreshDirectory } = open();
     await loaded();
@@ -251,9 +252,10 @@ describe.skipIf(!HAVE_CHATTER)('the Admin view against the real bridge and Chatt
     await user.clear(screen.getByLabelText('Tailscale login (optional)'));
     await user.type(screen.getByLabelText('Tailscale login (optional)'), 'ana@example.com');
     await user.click(screen.getByRole('button', { name: 'Save' }));
-    expect((await screen.findByRole('alert')).textContent).toBe(`${bridgeSays} ${MAYBE_DONE}`);
+    expect((await screen.findByRole('alert')).textContent).toBe(`${bridgeSays}. ${MAYBE_DONE}`);
     expect(screen.getByRole('dialog', { name: 'Edit bo' })).toBeTruthy();
-    expect(refreshDirectory).not.toHaveBeenCalled();
+    // A 500 cannot say that nothing was changed, so the page asks again for the directory (and the lists).
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
     expect(status().textContent).toBe('');
     const bo = ((await env.api('flan', 'GET', '/v1/members')).body as { members: Array<{ handle: string; tailscale_login: string | null }> }).members.find((m) => m.handle === 'bo');
     expect(bo?.tailscale_login).toBe('bo@example.com');

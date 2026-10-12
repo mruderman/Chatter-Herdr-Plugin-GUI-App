@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/dom';
 import { describe, expect, it } from 'vitest';
 import { cleanup } from '../../../test/render';
-import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError } from '../../api/errors';
+import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError, ProtocolError } from '../../api/errors';
 import type { AuditEntry } from '../../api/types';
 import { expectNoAxeViolations } from '../shell/test-utils';
 import { AUDIT_LIMIT } from './admin-view';
@@ -489,8 +489,8 @@ describe('Admin view: add member', () => {
     await user.type(dialog.getByLabelText('Handle'), 'maybe');
     await user.type(dialog.getByLabelText('Display name'), 'Maybe');
     await user.click(dialog.getByRole('button', { name: 'Add' }));
-    expect((await dialog.findByRole('alert')).textContent).toBe(`the connection to the bridge broke during an answer ${MAYBE_DONE}`);
-    expect(refreshDirectory).not.toHaveBeenCalled();
+    expect((await dialog.findByRole('alert')).textContent).toBe(`the connection to the bridge broke during an answer. ${MAYBE_DONE}`);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
   });
 
   it('says the same when the answer was a page from something in front of the bridge, which may have forwarded the request', async () => {
@@ -502,8 +502,8 @@ describe('Admin view: add member', () => {
     await user.type(dialog.getByLabelText('Handle'), 'maybe');
     await user.type(dialog.getByLabelText('Display name'), 'Maybe');
     await user.click(dialog.getByRole('button', { name: 'Add' }));
-    expect((await dialog.findByRole('alert')).textContent).toBe(`the bridge answered HTTP 502 ${MAYBE_DONE}`);
-    expect(refreshDirectory).not.toHaveBeenCalled();
+    expect((await dialog.findByRole('alert')).textContent).toBe(`the bridge answered HTTP 502. ${MAYBE_DONE}`);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
   });
 
   it('sends once when Add is pressed twice while the first call is out, and marks the button busy', async () => {
@@ -661,9 +661,9 @@ describe('Admin view: edit member', () => {
     };
     await add();
     // The database refused before anything was written, but a 500 cannot say so: the bridge also answers it
-    // when only the audit entry of a change that was made fails, so the hint stays.
-    expect((await screen.findByRole('alert')).textContent).toBe(`internal error ${MAYBE_DONE}`);
-    expect(refreshDirectory).not.toHaveBeenCalled();
+    // when only the audit entry of a change that was made fails, so the hint stays, and so does the reload.
+    expect((await screen.findByRole('alert')).textContent).toBe(`internal error. ${MAYBE_DONE}`);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
     const dialog = within(await openEdit(user, 'temp'));
@@ -719,13 +719,14 @@ describe('Admin view: edit member', () => {
     const dialog = within(await openEdit(user, 'ezra'));
     await user.type(dialog.getByLabelText('Tailscale login (optional)'), 'mira@example.com');
     await user.click(dialog.getByRole('button', { name: 'Save' }));
-    expect((await dialog.findByRole('alert')).textContent).toBe(`internal error ${MAYBE_DONE}`);
+    expect((await dialog.findByRole('alert')).textContent).toBe(`internal error. ${MAYBE_DONE}`);
     expect((dialog.getByLabelText('Tailscale login (optional)') as HTMLInputElement).value).toBe('mira@example.com');
     expect(screen.getByRole('dialog', { name: 'Edit ezra' })).toBeTruthy();
-    expect(refreshDirectory).not.toHaveBeenCalled();
+    // Nothing was changed, but the page cannot know it from a 500, so it asks again instead of assuming.
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
     expect(status().textContent).toBe('');
-    expect(bridge.callsTo('members')).toHaveLength(1);
-    expect(bridge.callsTo('audit')).toHaveLength(1);
+    await waitFor(() => expect(bridge.callsTo('members')).toHaveLength(2));
+    expect(bridge.callsTo('audit')).toHaveLength(2);
     expect(bridge.registry.find((member) => member.handle === 'ezra')?.tailscale_login).toBeNull();
   });
 });
@@ -923,7 +924,7 @@ describe('Admin view: rotate token', () => {
     expect(bridge.issued.length).toBe(0);
   });
 
-  it('says that a rotation answered with a server error may have gone through, since the bridge makes it before it audits it', async () => {
+  it('says that a rotation answered with a server error may have gone through, since the bridge makes it before it audits it, and reloads the lists', async () => {
     // bridge/src/server.js kills the old token and issues the new one before it writes the audit entry, so
     // an audit insert that fails answers 500 with the old token already dead and the new one lost.
     const bridge = new StubBridge();
@@ -932,9 +933,12 @@ describe('Admin view: rotate token', () => {
     await loaded();
     await openRotate(user, 'mira');
     await user.click(screen.getByRole('button', { name: 'Rotate' }));
-    expect((await screen.findByRole('alert')).textContent).toBe(`internal error ${MAYBE_DONE}`);
+    expect((await screen.findByRole('alert')).textContent).toBe(`internal error. ${MAYBE_DONE}`);
     expect(screen.getByRole('dialog', { name: 'Rotate token for mira?' })).toBeTruthy();
-    expect(refreshDirectory).not.toHaveBeenCalled();
+    // The hint sends the admin to the lists, which must not still be the ones from before the attempt.
+    await waitFor(() => expect(bridge.callsTo('members')).toHaveLength(2));
+    expect(bridge.callsTo('audit')).toHaveLength(2);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
     expect(bridge.issued.length).toBe(0);
   });
 
@@ -1030,6 +1034,125 @@ describe('Admin view: after a change', () => {
     expect(refreshDirectory).not.toHaveBeenCalled();
     expect(bridge.callsTo('members')).toHaveLength(1);
     expect(bridge.callsTo('audit')).toHaveLength(1);
+  });
+
+  // The bridge commits a change before it writes the audit entry, so a failure that is not its own refusal
+  // (a 500, a lost answer, a proxy's page) can follow a change that was made. The message then sends the
+  // admin to the members list, so the page must not go on showing the lists as they were before the attempt,
+  // nor the composer the directory as it was. Nothing else changes: the dialog stays, with its alert.
+  it.each(CHANGES)('reloads both lists and asks for the directory once when %s fails with a 500, and announces nothing', async (_name, change) => {
+    const bridge = new StubBridge();
+    for (const method of ['addMember', 'updateMember', 'revokeMember', 'rotateToken']) {
+      bridge.failNext(method, new ApiError(500, ERROR_CODES.internal, 'internal error'));
+    }
+    const { user, refreshDirectory } = renderAdmin(bridge);
+    await loaded();
+    await change(user);
+    expect((await screen.findByRole('alert')).textContent).toContain(MAYBE_DONE);
+    await waitFor(() => expect(bridge.callsTo('members')).toHaveLength(2));
+    expect(bridge.callsTo('audit')).toHaveLength(2);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(status().textContent).toBe('');
+  });
+
+  it.each<[string, Error]>([
+    ['a 502 page from in front of the bridge', new ApiError(502, CLIENT_ERROR_CODES.unexpectedStatus, 'the bridge answered HTTP 502')],
+    ['an answer lost on the way', new NetworkError('the connection to the bridge broke during an answer')],
+    ['an answer in a shape the page does not know', new ProtocolError('member', 'is not an object')],
+  ])('reloads both lists and asks for the directory once after %s too', async (_what, error) => {
+    const bridge = new StubBridge();
+    bridge.failNext('revokeMember', error);
+    const { user, refreshDirectory } = renderAdmin(bridge);
+    await loaded();
+    await user.click(within(memberRow('ezra')).getByRole('button', { name: 'Revoke ezra' }));
+    await user.click(screen.getByRole('button', { name: 'Revoke' }));
+    expect((await screen.findByRole('alert')).textContent).toContain(MAYBE_DONE);
+    await waitFor(() => expect(bridge.callsTo('members')).toHaveLength(2));
+    expect(bridge.callsTo('audit')).toHaveLength(2);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows in the reloaded table a member whose add was made but answered 500, and keeps the dialog, its alert and what was typed', async () => {
+    // What the bridge does when only the audit entry that follows the add fails: the member exists.
+    const bridge = new StubBridge();
+    const add = bridge.addMember.bind(bridge);
+    bridge.addMember = async (request) => {
+      await add(request);
+      throw new ApiError(500, ERROR_CODES.internal, 'internal error');
+    };
+    const { user } = renderAdmin(bridge);
+    await loaded();
+    await user.click(screen.getByRole('button', { name: 'Add member' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add member' }));
+    await user.type(dialog.getByLabelText('Handle'), 'maybe');
+    await user.type(dialog.getByLabelText('Display name'), 'Maybe');
+    await user.click(dialog.getByRole('button', { name: 'Add' }));
+    expect((await dialog.findByRole('alert')).textContent).toContain(MAYBE_DONE);
+    await waitFor(() => expect(cells(memberRow('maybe')).slice(0, 6)).toEqual(['maybe', 'Maybe', 'Human', 'Member', 'Yes', 'Active']));
+    expect(screen.getByRole('dialog', { name: 'Add member' })).toBeTruthy();
+    expect(dialog.getByRole('alert').textContent).toContain(MAYBE_DONE);
+    expect((dialog.getByLabelText('Handle') as HTMLInputElement).value).toBe('maybe');
+    expect((dialog.getByLabelText('Display name') as HTMLInputElement).value).toBe('Maybe');
+    expect(status().textContent).toBe('');
+  });
+
+  it("does none of this after the bridge's own refusal: no reload, no directory refresh, no announcement, and the dialog stays", async () => {
+    const { user, bridge, refreshDirectory } = renderAdmin();
+    await loaded();
+    await user.click(screen.getByRole('button', { name: 'Add member' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add member' }));
+    await user.type(dialog.getByLabelText('Handle'), 'thom');
+    await user.type(dialog.getByLabelText('Display name'), 'Thom');
+    await user.click(dialog.getByRole('button', { name: 'Add' }));
+    expect((await dialog.findByRole('alert')).textContent).toBe('member "thom" already exists');
+    await settle();
+    expect(bridge.callsTo('members')).toHaveLength(1);
+    expect(bridge.callsTo('audit')).toHaveLength(1);
+    expect(refreshDirectory).not.toHaveBeenCalled();
+    expect(status().textContent).toBe('');
+    expect(screen.getByRole('dialog', { name: 'Add member' })).toBeTruthy();
+  });
+
+  it('asks for nothing when a failure that may have gone through arrives after the view is gone', async () => {
+    const bridge = new StubBridge();
+    bridge.failNext('updateMember', new ApiError(500, ERROR_CODES.internal, 'internal error'));
+    const gate = bridge.hold('updateMember');
+    const { user, refreshDirectory } = renderAdmin(bridge);
+    await loaded();
+    await user.click(within(memberRow('ezra')).getByRole('button', { name: 'Edit ezra' }));
+    await user.clear(screen.getByLabelText('Display name'));
+    await user.type(screen.getByLabelText('Display name'), 'Ezra R.');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    cleanup();
+    gate.release();
+    await settle();
+    expect(bridge.callsTo('updateMember')).toHaveLength(1);
+    expect(bridge.callsTo('members')).toHaveLength(1);
+    expect(bridge.callsTo('audit')).toHaveLength(1);
+    expect(refreshDirectory).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, (refresh: Rendered['refreshDirectory']) => void]>([
+    ['rejects', (refresh) => void refresh.mockRejectedValue(new Error('directory unavailable'))],
+    [
+      'throws at once',
+      (refresh) =>
+        void refresh.mockImplementation(() => {
+          throw new Error('not even a promise');
+        }),
+    ],
+  ])('survives a refresh that %s after a failure that may have gone through', async (_how, breakRefresh) => {
+    const bridge = new StubBridge();
+    bridge.failNext('revokeMember', new ApiError(500, ERROR_CODES.internal, 'internal error'));
+    const { user, refreshDirectory } = renderAdmin(bridge);
+    await loaded();
+    breakRefresh(refreshDirectory);
+    await user.click(within(memberRow('ezra')).getByRole('button', { name: 'Revoke ezra' }));
+    await user.click(screen.getByRole('button', { name: 'Revoke' }));
+    expect((await screen.findByRole('alert')).textContent).toContain(MAYBE_DONE);
+    await waitFor(() => expect(bridge.callsTo('members')).toHaveLength(2));
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
   });
 
   it('survives a refresh that rejects', async () => {

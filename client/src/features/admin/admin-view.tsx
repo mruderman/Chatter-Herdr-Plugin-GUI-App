@@ -3,7 +3,7 @@ import type { Api } from '../../api/client';
 import type { AddMemberRequest, Member, UpdateMemberRequest } from '../../api/types';
 import { AuditTable } from './audit-table';
 import { ConfirmDialog } from './confirm-dialog';
-import { describeChangeFailure } from './failure';
+import { describeChangeFailure, isRefusal } from './failure';
 import { createTimeFormatter } from './format';
 import { AddMemberDialog, EditMemberDialog } from './member-dialogs';
 import { MembersTable, editButtonId } from './members-table';
@@ -102,17 +102,25 @@ export function AdminView({ api, refreshDirectory, selfHandle, timeZone }: Admin
   // A call can finish after its dialog was dismissed, and another dialog may be open by then.
   const closeDialogIfOpen = (id: number): void => setDialog((current) => (current?.id === id ? null : current));
 
-  function afterChange(text: string): void {
+  // What a change that was made, or may have been, asks of the page: the store's directory, so that the
+  // composer sees it (asked even when this view has gone, since the composer outlives it), and while the
+  // view is here both lists.
+  function reloadAfterChange(): void {
     void (async () => {
       try {
         await refreshDirectory();
       } catch {
-        // The change itself has succeeded; a directory that could not be refreshed stays as it was.
+        // A directory that could not be refreshed stays as it was.
       }
     })();
     if (!alive.current) return;
     members.reload();
     audit.reload();
+  }
+
+  function afterChange(text: string): void {
+    reloadAfterChange();
+    if (!alive.current) return;
     setAnnouncement((previous) => ({ seq: (previous?.seq ?? 0) + 1, text }));
   }
 
@@ -123,6 +131,10 @@ export function AdminView({ api, refreshDirectory, selfHandle, timeZone }: Admin
     try {
       result = await call();
     } catch (failure) {
+      // Anything but the bridge's own refusal may have been made, and its message sends the admin to the
+      // lists, which must not still be the ones from before the attempt. A view that has gone has nobody
+      // to read that message, so it asks for nothing.
+      if (!isRefusal(failure) && alive.current) reloadAfterChange();
       return { ok: false, message: describeChangeFailure(failure) };
     }
     onSuccess(result);
