@@ -51,6 +51,14 @@ async function populate(env: BridgeEnv): Promise<World> {
   };
   env.seedAgent(AGENT);
 
+  // What the audit log of a bridge holds once its admin has added the cast through the admin API. The
+  // harness adds them through the store, which writes no entry, and without these the Admin view would
+  // only ever show an empty log, so no scan would reach the audit table.
+  for (const name of ['hana', 'ivo', 'kai'] as const) {
+    const c = CAST[name];
+    env.store.audit({ actor: CAST.admin.handle, action: 'member_add', target: c.handle, detail: { kind: c.kind, role: c.role, can_address_agents: true } });
+  }
+
   // A second repo gives the repository switcher a real choice (the keyboard spec switches to it and back).
   const sidecarDir = path.join(env.root, SIDECAR);
   makeGitRepo(sidecarDir);

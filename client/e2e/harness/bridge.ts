@@ -27,7 +27,10 @@ export interface BridgeEnv {
   base: string;
   repoInfo: ChatterRepo;
   tokens: Record<string, string>;
-  store: { updateMember(handle: string, patch: { display_name?: string }): unknown };
+  store: {
+    updateMember(handle: string, patch: { display_name?: string }): unknown;
+    audit(entry: { actor: string; action: string; target?: string | null; detail?: Record<string, unknown> | null }): void;
+  };
   host: {
     run(o: { handle: string; cwd: string; args: string[] }): Promise<{ code: number | null; stdout: string; stderr: string }>;
     repos(o?: { fresh?: boolean }): Promise<ChatterRepo[]>;

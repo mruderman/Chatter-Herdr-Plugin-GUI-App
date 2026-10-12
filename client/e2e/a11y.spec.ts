@@ -2,7 +2,7 @@
 // WCAG 2.2 AA tag set, on sign-in, Chat, Board, Members, Admin, Settings and an open dialog, in the
 // light, dark and high-contrast themes (ui-contract section 6, SPEC section 7). Each theme comes from
 // the emulated system preference, which the contract says the default follows.
-import type { BrowserContextOptions, Page } from '@playwright/test';
+import type { BrowserContextOptions, Locator, Page } from '@playwright/test';
 import { seriousViolations } from './harness/axe';
 import { expect, openChat, signIn, test } from './harness/fixtures';
 import { UI, ui } from './harness/ui';
@@ -16,6 +16,17 @@ const THEMES: ReadonlyArray<{ theme: string; media: BrowserContextOptions; backg
   { theme: UI.theme.dark, media: { colorScheme: 'dark', contrast: 'no-preference' }, background: 'rgb(14, 18, 22)' },
   { theme: UI.theme.hc, media: { colorScheme: 'light', contrast: 'more' }, background: 'rgb(0, 0, 0)' },
 ];
+// What each view shows once its data has arrived. A view's heading is on the page while its request is
+// still out, and a scan then certifies the "Loading" line instead of the content. The world holds an agent
+// (so the Board has an Agents section) and audit entries (so the Admin view has an audit table).
+const LOADED: Readonly<Record<string, (page: Page) => Locator[]>> = {
+  [UI.views.board]: (page) => [page.getByRole('heading', { level: 2, name: 'Agents', exact: true })],
+  [UI.views.members]: (page) => [page.getByRole('list', { name: UI.views.members, exact: true })],
+  [UI.views.admin]: (page) => [
+    page.getByRole('table', { name: UI.admin.membersTable, exact: true }),
+    page.getByRole('table', { name: UI.admin.auditTable, exact: true }),
+  ],
+};
 // Anything longer than this counts as motion; 0.01 ms is the common "reduce to nothing" idiom.
 const MAX_MOTION_SECONDS = 0.00001;
 
@@ -35,10 +46,12 @@ for (const { theme, media, background } of THEMES) {
     await signIn(page, world.members.admin.token);
     await openChat(page, world.repo.label);
     await expect(ui.feed(page)).toBeVisible();
+    await expect(ui.feed(page).getByRole('article').first(), 'the feed holds a message').toBeVisible();
     await scan('Chat');
     for (const view of [UI.views.board, UI.views.members, UI.views.admin]) {
       await ui.viewButton(page, view).click();
       await expect(ui.viewHeading(page, view)).toBeVisible();
+      for (const content of LOADED[view]?.(page) ?? []) await expect(content, `${view} has loaded`).toBeVisible();
       await scan(view);
     }
 
