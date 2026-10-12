@@ -13,6 +13,7 @@ import { render } from '../../../test/render';
 import { createApi, type FetchLike } from '../../api/client';
 import { setupUser } from '../shell/test-utils';
 import { AdminView } from './admin-view';
+import { MAYBE_DONE } from './failure';
 import { auditTable, cells, memberRow, membersTable, placesHolding, settle, status } from './test-support';
 
 const CHATTER_JS = process.env.CHATTER_JS ?? '';
@@ -228,9 +229,11 @@ describe.skipIf(!HAVE_CHATTER)('the Admin view against the real bridge and Chatt
     expect(audit.entries).toHaveLength(3);
   }, SLOW);
 
-  it('shows a refusal that the bridge does not explain exactly as the bridge words it, and changes nothing else', async () => {
+  it('shows a failure that the bridge does not explain in the bridge\'s own words and the hint that it may have gone through, and changes nothing else', async () => {
     // Observed: PATCH with a Tailscale login that another member already holds fails inside the bridge
-    // with 500 "internal error", where POST says 409 login_taken. Whatever the bridge says, the dialog says.
+    // with 500 "internal error", where POST says 409 login_taken. The dialog says what the bridge says,
+    // and since a 500 cannot say that nothing was changed (the bridge also answers it when only the audit
+    // entry of a change that was made fails), the hint follows, though here nothing was changed.
     for (const [handle, login] of [
       ['ana', 'ana@example.com'],
       ['bo', 'bo@example.com'],
@@ -238,7 +241,7 @@ describe.skipIf(!HAVE_CHATTER)('the Admin view against the real bridge and Chatt
       expect((await env.api('flan', 'POST', '/v1/members', { handle, kind: 'human', display_name: handle, tailscale_login: login })).status).toBe(201);
     }
     const direct = await env.api('flan', 'PATCH', '/v1/members/bo', { tailscale_login: 'ana@example.com' });
-    expect(direct.status).toBeGreaterThanOrEqual(400);
+    expect(direct.status).toBe(500);
     const bridgeSays = errorOf(direct).message ?? '';
     expect(bridgeSays).not.toBe('');
 
@@ -248,7 +251,7 @@ describe.skipIf(!HAVE_CHATTER)('the Admin view against the real bridge and Chatt
     await user.clear(screen.getByLabelText('Tailscale login (optional)'));
     await user.type(screen.getByLabelText('Tailscale login (optional)'), 'ana@example.com');
     await user.click(screen.getByRole('button', { name: 'Save' }));
-    expect((await screen.findByRole('alert')).textContent).toBe(bridgeSays);
+    expect((await screen.findByRole('alert')).textContent).toBe(`${bridgeSays} ${MAYBE_DONE}`);
     expect(screen.getByRole('dialog', { name: 'Edit bo' })).toBeTruthy();
     expect(refreshDirectory).not.toHaveBeenCalled();
     expect(status().textContent).toBe('');

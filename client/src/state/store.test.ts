@@ -4,12 +4,13 @@
 // What the contract fixes word for word is in conformance.test.ts, against both stores.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { body, recordedError } from '../../test/fixtures/recorded';
+import type { Api } from '../api/client';
 import { ManualClock } from '../api/clock';
 import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError } from '../api/errors';
-import { parseMessagesPage } from '../api/guards';
+import { parseDirectory, parseMessagesPage } from '../api/guards';
 import { QUERY, ROUTES } from '../api/routes';
 import type { StreamTiming } from '../api/stream';
-import { CHANNEL, type Message } from '../api/types';
+import { CHANNEL, type Directory, type Message } from '../api/types';
 import type { FakeMember } from './fake';
 import { BRIDGE_ROUTES, FakeBridge, MAIN_REPO, SITE_REPO } from './fake-api';
 import { createStore } from './store';
@@ -33,6 +34,64 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
+type Settled = 'pending' | 'resolved' | 'rejected';
+
+/**
+ * What became of a promise, readable at any moment without awaiting it: a store that never settles it
+ * must fail on an expectation about the state, not on a timeout.
+ */
+function watch(promise: Promise<void>): { readonly state: Settled } {
+  const watched = { state: 'pending' as Settled };
+  void promise.then(
+    () => {
+      watched.state = 'resolved';
+    },
+    () => {
+      watched.state = 'rejected';
+    },
+  );
+  return watched;
+}
+
+/** The directory as the recording has it, then with a member added, then with an agent added too. */
+const DIRECTORY_BEFORE = parseDirectory(body('directory'));
+const DIRECTORY_AFTER: Directory = { members: [...DIRECTORY_BEFORE.members, { handle: 'wren', display_name: 'Wren', kind: 'human' }], agents: DIRECTORY_BEFORE.agents };
+const DIRECTORY_LATER: Directory = { members: DIRECTORY_AFTER.members, agents: [...DIRECTORY_AFTER.agents, 'sage'] };
+
+interface HeldRequest {
+  readonly answer: (directory: Directory) => void;
+  readonly fail: (error: unknown) => void;
+}
+
+/**
+ * Takes directory() over once start() is called: every request is then held until the test answers or
+ * fails it, so the test decides which request is out and in what order they finish. A request the store
+ * drops (sign-out, revocation, dispose) fails with an AbortError, as a fetch does.
+ */
+function steerDirectory() {
+  const asked: HeldRequest[] = [];
+  let steering = false;
+  const aborted = (): DOMException => new DOMException('The operation was aborted.', 'AbortError');
+  return {
+    asked,
+    start(): void {
+      steering = true;
+    },
+    wrap: (inner: Api): Api => ({
+      ...inner,
+      directory: (options) => {
+        if (!steering) return inner.directory(options);
+        return new Promise<Directory>((resolve, reject) => {
+          asked.push({ answer: resolve, fail: reject });
+          const signal = options?.signal;
+          if (signal?.aborted) reject(aborted());
+          signal?.addEventListener('abort', () => reject(aborted()), { once: true });
+        });
+      },
+    }),
+  };
+}
+
 interface HarnessOptions {
   readonly as?: FakeMember;
   /** 'identity': signed in on start through the tailnet header (the default). 'signed-out': a token is needed. */
@@ -42,6 +101,8 @@ interface HarnessOptions {
   readonly streamTiming?: Partial<StreamTiming>;
   /** Scripts the bridge before the store asks it anything. */
   readonly before?: (bridge: FakeBridge) => void;
+  /** Puts a layer between the store and the scripted bridge's Api, for a test that must control one route. */
+  readonly wrap?: (api: Api) => Api;
 }
 
 const stores: Store[] = [];
@@ -58,8 +119,9 @@ async function harness(options: HarnessOptions = {}) {
   const bridge = new FakeBridge({ clock, identity: (options.start ?? 'identity') === 'identity' ? as : null, lastReadId: options.lastReadId });
   options.before?.(bridge);
   const errors: unknown[] = [];
+  const { wrap } = options;
   const store = createStore({
-    api: bridge.api,
+    api: wrap ? (getToken) => wrap(bridge.api(getToken)) : bridge.api,
     clock,
     random: () => 0.5,
     streamTiming: options.streamTiming ?? QUIET,
@@ -580,6 +642,144 @@ describe('the directory', () => {
     await expect(h.store.refreshDirectory()).resolves.toBeUndefined();
     expect(h.now().directory).toBe(before);
     expect(h.errors).toEqual([]);
+  });
+});
+
+/** A signed-in store whose directory requests, from now on, wait for the test (the sign-in load is done). */
+async function steered() {
+  const steer = steerDirectory();
+  const h = await harness({ wrap: steer.wrap });
+  steer.start();
+  return { ...h, asked: steer.asked };
+}
+type Steered = Awaited<ReturnType<typeof steered>>;
+
+// The admin panel calls refreshDirectory() once its change is made. A request that was already out
+// may have been answered before the change, so a call is answered by a request that started after it:
+// it may share one that is queued and has not started, never one that is running.
+describe('the directory, when a request is already in flight', () => {
+  it('lets two calls with nothing in flight share one request', async () => {
+    const h = await steered();
+    const first = watch(h.store.refreshDirectory());
+    const second = watch(h.store.refreshDirectory());
+    await settle();
+    expect(h.asked).toHaveLength(1);
+    expect([first.state, second.state]).toEqual(['pending', 'pending']);
+    h.asked[0]?.answer(DIRECTORY_AFTER);
+    await settle();
+    expect([first.state, second.state]).toEqual(['resolved', 'resolved']);
+    expect(h.asked).toHaveLength(1);
+    expect(h.now().directory).toEqual(DIRECTORY_AFTER);
+  });
+
+  it('starts a second request only after the running one has settled, and resolves the call with that second answer', async () => {
+    const h = await steered();
+    expect(h.now().directory).toEqual(DIRECTORY_BEFORE);
+    const running = watch(h.store.refreshDirectory());
+    await settle();
+    expect(h.asked).toHaveLength(1);
+    // The panel's call, made after its change: the running request may be older than the change.
+    const call = watch(h.store.refreshDirectory());
+    await settle();
+    expect(h.asked).toHaveLength(1);
+    // The running request answers as the bridge had things before the change.
+    h.asked[0]?.answer(DIRECTORY_BEFORE);
+    await settle();
+    expect(running.state).toBe('resolved');
+    expect(h.asked).toHaveLength(2);
+    expect(call.state).toBe('pending');
+    h.asked[1]?.answer(DIRECTORY_AFTER);
+    await settle();
+    expect(call.state).toBe('resolved');
+    expect(h.asked).toHaveLength(2);
+    expect(h.now().directory).toEqual(DIRECTORY_AFTER);
+  });
+
+  it('shares the queued follow-up among the calls that arrive before it starts, and gives one that arrives while it runs a third request', async () => {
+    const h = await steered();
+    const running = watch(h.store.refreshDirectory());
+    await settle();
+    const early = watch(h.store.refreshDirectory());
+    const sharing = watch(h.store.refreshDirectory());
+    await settle();
+    expect(h.asked).toHaveLength(1);
+    h.asked[0]?.answer(DIRECTORY_BEFORE);
+    await settle();
+    expect(h.asked).toHaveLength(2);
+    expect([running.state, early.state, sharing.state]).toEqual(['resolved', 'pending', 'pending']);
+    const late = watch(h.store.refreshDirectory());
+    await settle();
+    expect(h.asked).toHaveLength(2);
+    h.asked[1]?.answer(DIRECTORY_AFTER);
+    await settle();
+    expect(h.asked).toHaveLength(3);
+    expect([early.state, sharing.state, late.state]).toEqual(['resolved', 'resolved', 'pending']);
+    h.asked[2]?.answer(DIRECTORY_LATER);
+    await settle();
+    expect(late.state).toBe('resolved');
+    expect(h.asked).toHaveLength(3);
+    expect(h.now().directory).toEqual(DIRECTORY_LATER);
+  });
+
+  it('runs the follow-up when the request before it failed, and the failed one still resolves', async () => {
+    const h = await steered();
+    const running = watch(h.store.refreshDirectory());
+    await settle();
+    const call = watch(h.store.refreshDirectory());
+    await settle();
+    h.asked[0]?.fail(new NetworkError('could not reach the bridge'));
+    await settle();
+    expect(running.state).toBe('resolved');
+    expect(h.asked).toHaveLength(2);
+    expect(call.state).toBe('pending');
+    h.asked[1]?.answer(DIRECTORY_AFTER);
+    await settle();
+    expect(call.state).toBe('resolved');
+    expect(h.now().directory).toEqual(DIRECTORY_AFTER);
+    expect(h.errors).toEqual([]);
+  });
+
+  it.each([
+    ['the periodic refresh', async (h: Steered) => h.advance(5 * 60_000)],
+    [
+      'a message from a sender the directory does not know',
+      async (h: Steered) => {
+        h.bridge.write({ from: 'wren', body: 'new here' });
+        await settle();
+      },
+    ],
+  ])('gives the call that follows %s a request of its own, started later', async (_trigger, start) => {
+    const h = await steered();
+    await start(h);
+    expect(h.asked).toHaveLength(1);
+    const call = watch(h.store.refreshDirectory());
+    await settle();
+    expect(h.asked).toHaveLength(1);
+    h.asked[0]?.answer(DIRECTORY_BEFORE);
+    await settle();
+    expect(h.asked).toHaveLength(2);
+    expect(call.state).toBe('pending');
+    h.asked[1]?.answer(DIRECTORY_AFTER);
+    await settle();
+    expect(call.state).toBe('resolved');
+    expect(h.now().directory).toEqual(DIRECTORY_AFTER);
+  });
+
+  it.each([
+    ['the member signs out', (h: Steered) => h.store.signOut()],
+    ['the bridge revokes the member', (h: Steered) => h.bridge.revoke('thom')],
+    ['the store is disposed', (h: Steered) => h.store.dispose()],
+  ])('lets a follow-up that is still queued when %s go without a request, and resolves its callers', async (_end, end) => {
+    const h = await steered();
+    const running = watch(h.store.refreshDirectory());
+    await settle();
+    const queued = watch(h.store.refreshDirectory());
+    await settle();
+    expect(h.asked).toHaveLength(1);
+    end(h);
+    await settle();
+    expect([running.state, queued.state]).toEqual(['resolved', 'resolved']);
+    expect(h.asked).toHaveLength(1);
   });
 });
 

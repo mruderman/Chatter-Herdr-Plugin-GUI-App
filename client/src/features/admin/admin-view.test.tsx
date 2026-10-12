@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/dom';
 import { describe, expect, it } from 'vitest';
 import { cleanup } from '../../../test/render';
-import { ApiError, ERROR_CODES, NetworkError } from '../../api/errors';
+import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError } from '../../api/errors';
 import type { AuditEntry } from '../../api/types';
 import { expectNoAxeViolations } from '../shell/test-utils';
 import { AUDIT_LIMIT } from './admin-view';
@@ -493,6 +493,19 @@ describe('Admin view: add member', () => {
     expect(refreshDirectory).not.toHaveBeenCalled();
   });
 
+  it('says the same when the answer was a page from something in front of the bridge, which may have forwarded the request', async () => {
+    const bridge = new StubBridge();
+    bridge.failNext('addMember', new ApiError(502, CLIENT_ERROR_CODES.unexpectedStatus, 'the bridge answered HTTP 502'));
+    const { user, refreshDirectory } = renderAdmin(bridge);
+    await loaded();
+    const dialog = within(await openAdd(user));
+    await user.type(dialog.getByLabelText('Handle'), 'maybe');
+    await user.type(dialog.getByLabelText('Display name'), 'Maybe');
+    await user.click(dialog.getByRole('button', { name: 'Add' }));
+    expect((await dialog.findByRole('alert')).textContent).toBe(`the bridge answered HTTP 502 ${MAYBE_DONE}`);
+    expect(refreshDirectory).not.toHaveBeenCalled();
+  });
+
   it('sends once when Add is pressed twice while the first call is out, and marks the button busy', async () => {
     const bridge = new StubBridge();
     const gate = bridge.hold('addMember');
@@ -647,7 +660,9 @@ describe('Admin view: edit member', () => {
       await user.click(screen.getByRole('button', { name: 'Add' }));
     };
     await add();
-    expect((await screen.findByRole('alert')).textContent).toBe('internal error');
+    // The database refused before anything was written, but a 500 cannot say so: the bridge also answers it
+    // when only the audit entry of a change that was made fails, so the hint stays.
+    expect((await screen.findByRole('alert')).textContent).toBe(`internal error ${MAYBE_DONE}`);
     expect(refreshDirectory).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
@@ -696,14 +711,15 @@ describe('Admin view: edit member', () => {
     expect(bridge.callsTo('members')).toHaveLength(1);
   });
 
-  it('shows a bare "internal error" as it is, keeps the dialog and what was typed, and changes nothing else', async () => {
-    // The real bridge answers a Tailscale login that another member holds with exactly this (observed).
+  it('shows a bare "internal error" with the hint that the change may have gone through, keeps the dialog and what was typed, and changes nothing else', async () => {
+    // The real bridge answers a Tailscale login that another member holds with exactly this (observed). It
+    // is a 500, which cannot say that nothing was changed, so the hint over-warns here and that is accepted.
     const { user, bridge, refreshDirectory } = renderAdmin();
     await loaded();
     const dialog = within(await openEdit(user, 'ezra'));
     await user.type(dialog.getByLabelText('Tailscale login (optional)'), 'mira@example.com');
     await user.click(dialog.getByRole('button', { name: 'Save' }));
-    expect((await dialog.findByRole('alert')).textContent).toBe('internal error');
+    expect((await dialog.findByRole('alert')).textContent).toBe(`internal error ${MAYBE_DONE}`);
     expect((dialog.getByLabelText('Tailscale login (optional)') as HTMLInputElement).value).toBe('mira@example.com');
     expect(screen.getByRole('dialog', { name: 'Edit ezra' })).toBeTruthy();
     expect(refreshDirectory).not.toHaveBeenCalled();
@@ -902,6 +918,21 @@ describe('Admin view: rotate token', () => {
     await openRotate(user, 'mira');
     await user.click(screen.getByRole('button', { name: 'Rotate' }));
     expect((await screen.findByRole('alert')).textContent).toBe('no active member "mira"');
+    expect(screen.getByRole('dialog', { name: 'Rotate token for mira?' })).toBeTruthy();
+    expect(refreshDirectory).not.toHaveBeenCalled();
+    expect(bridge.issued.length).toBe(0);
+  });
+
+  it('says that a rotation answered with a server error may have gone through, since the bridge makes it before it audits it', async () => {
+    // bridge/src/server.js kills the old token and issues the new one before it writes the audit entry, so
+    // an audit insert that fails answers 500 with the old token already dead and the new one lost.
+    const bridge = new StubBridge();
+    bridge.failNext('rotateToken', new ApiError(500, ERROR_CODES.internal, 'internal error'));
+    const { user, refreshDirectory } = renderAdmin(bridge);
+    await loaded();
+    await openRotate(user, 'mira');
+    await user.click(screen.getByRole('button', { name: 'Rotate' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(`internal error ${MAYBE_DONE}`);
     expect(screen.getByRole('dialog', { name: 'Rotate token for mira?' })).toBeTruthy();
     expect(refreshDirectory).not.toHaveBeenCalled();
     expect(bridge.issued.length).toBe(0);

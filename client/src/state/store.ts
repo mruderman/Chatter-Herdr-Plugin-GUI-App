@@ -110,7 +110,9 @@ class Live {
   revoked = false;
   /** Bumped on every change of repo or conversation, so a late send failure is not shown in another one. */
   selection = 0;
-  refreshing: Promise<void> | null = null;
+  /** The directory request in flight, and the one waiting behind it (see refreshDirectory). A request's failure is caught inside, so neither rejects. */
+  runningRefresh: Promise<void> | null = null;
+  queuedRefresh: Promise<void> | null = null;
   readonly unknownAt = new Map<string, number>();
   private readonly timers = new Set<() => void>();
 
@@ -471,11 +473,21 @@ export function createStore(options: StoreOptions = {}): Store {
     publish();
   }
 
+  // A call resolves after a request that started after the call. The admin panel calls this once its
+  // change is made, and a request that was already out may have been answered before the change, so a
+  // caller shares a request that is queued and has not started, never one that is running. At most one
+  // request waits, behind the one running. With nothing running it still starts a microtask later, so
+  // the calls of one synchronous turn share it, and a failure of the request ahead does not stop it.
   function refreshDirectory(): Promise<void> {
     const current = live;
     if (disposed || !current || current.revoked) return Promise.resolve();
-    if (current.refreshing) return current.refreshing;
-    current.refreshing = (async () => {
+    if (current.queuedRefresh) return current.queuedRefresh;
+    const queued: Promise<void> = (current.runningRefresh ?? Promise.resolve()).then(async () => {
+      // One synchronous step from the queue to the request: a caller that arrives after it must find the
+      // request running and not queued, and one that arrives before it must find it queued.
+      current.queuedRefresh = null;
+      if (live !== current || disposed || current.revoked) return;
+      current.runningRefresh = queued;
       try {
         const directory = await api.directory({ signal: current.abort.signal });
         if (live !== current || disposed || current.revoked) return;
@@ -488,10 +500,11 @@ export function createStore(options: StoreOptions = {}): Store {
         const read = classify(failure, current.abort.signal);
         if (read.kind === 'bug') report(read.error);
       } finally {
-        current.refreshing = null;
+        if (current.runningRefresh === queued) current.runningRefresh = null;
       }
-    })();
-    return current.refreshing;
+    });
+    current.queuedRefresh = queued;
+    return queued;
   }
 
   // -------------------------------------------------------------------------------------- actions
