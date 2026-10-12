@@ -84,6 +84,10 @@ describe('check-dist', () => {
     ['a tab inside a URL scheme', '<img src="h\tttps://example.com/a.png">', /control character/i],
     ['a newline inside a URL scheme', '<img src="https:\n//example.com/a.png">', /control character/i],
     ['a carriage return inside a URL', '<img src="ht\rtps://example.com/a.png">', /control character/i],
+    // The URL parser reads a backslash as a slash, so `\\cdn.example/app.js` is a protocol-relative URL to a browser.
+    ['two backslashes in front of a host', '<script src="\\\\cdn.example/app.js"></script>', /backslash/i],
+    ['backslashes after a scheme', '<img src="https:\\\\example.com/a.png">', /backslash/i],
+    ['one backslash in a path', '<link rel="stylesheet" href="/assets\\x.css">', /backslash/i],
     // The rule is "any foreign-origin URL in index.html", so text and comments count, not only attributes.
     ['a URL in text', '<p>Docs live at https://example.com/docs</p>', /foreign-origin URL/i],
     ['a URL in a comment', '<!-- served from https://cdn.example.com/x.js -->', /foreign-origin URL/i],

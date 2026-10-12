@@ -1,7 +1,8 @@
 // Fails the build when dist/index.html holds anything the bridge's CSP (D15) blocks or could let slip
 // past it: inline scripts or styles, style and event-handler attributes, any foreign-origin URL, and in an
-// attribute value a character reference or a tab or newline (this scan neither decodes the one nor strips
-// the other, as a browser does, so either could hide a URL).
+// attribute value a character reference, a tab, a newline or a backslash (this scan neither decodes the
+// first nor strips the second and third nor reads the last as a slash, as a browser does, so any of them
+// could hide a URL).
 // It reads index.html only; dist/assets/* is bundler output and is not read here.
 //
 // Usage: node scripts/check-dist.mjs [distDir]   (default: ../dist next to this script)
@@ -66,6 +67,11 @@ function scan(html) {
       // https URL to a browser and nothing to the patterns below, which want the scheme in one piece.
       if (/[\t\n\r]/.test(attribute.value)) {
         problems.push(`control character in ${attribute.name}=${JSON.stringify(shown(attribute.value))} on <${name}>`);
+      }
+      // And it reads a backslash as a slash, so `\\cdn.example/app.js` is a protocol-relative URL to a browser and
+      // matches neither pattern below. Vite writes none.
+      if (attribute.value.includes('\\')) {
+        problems.push(`backslash in ${attribute.name}=${JSON.stringify(shown(attribute.value))} on <${name}>`);
       }
       if (ESCAPING_ATTRIBUTE_URL.test(attribute.value)) {
         problems.push(`foreign-origin URL in ${attribute.name}="${shown(attribute.value)}" on <${name}>`);
