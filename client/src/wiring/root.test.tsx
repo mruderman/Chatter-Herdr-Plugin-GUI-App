@@ -1,21 +1,25 @@
 // The running app as main.tsx puts it together (T10 brief, "Wiring" and "Registry"), over the fake
 // store: the shell's props come from the snapshot, the registry's views are the real ones, the Board
-// uses the services' Api and clock, and Settings gets the notifier's controls. Names and texts are
-// written out as docs/ui-contract.md has them.
+// uses the services' Api and clock, and Settings gets the notifier's controls. The Admin entry runs
+// over the real store instead (T10b), because whose token its requests carry shows only where a store
+// holds one. Names and texts are written out as docs/ui-contract.md has them.
 import { screen, within } from '@testing-library/dom';
 import { act } from 'preact/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { body } from '../../test/fixtures/recorded';
+import { body, exchange } from '../../test/fixtures/recorded';
 import { render } from '../../test/render';
 import { createApi, type Api } from '../api/client';
 import { ManualClock } from '../api/clock';
-import { parseBoard } from '../api/guards';
+import { parseBoard, parseMe, parseMembers } from '../api/guards';
+import { QUERY, ROUTES } from '../api/routes';
+import type { Me } from '../api/types';
+import { AUDIT_LIMIT } from '../features/admin';
 import { createNotifier } from '../features/notify';
 import { createThemeManager } from '../features/shell';
 import { expectNoAxeViolations, setupUser } from '../features/shell/test-utils';
 import { createFakeStore, FAKE_TOKEN, type FakeStore, type FakeStoreOptions } from '../state/fake';
 import { AppRoot } from './root';
-import type { Services } from './services';
+import { createServices, type Services } from './services';
 
 const REPO = 'repo-c522d9cf';
 const OTHER_REPO = 'site-24538864';
@@ -69,6 +73,87 @@ function setup(options: FakeStoreOptions = {}) {
 
 const heading = (): string | null => screen.getByRole('heading', { level: 1 }).textContent;
 const nav = () => within(screen.getByRole('navigation', { name: 'Primary' }));
+
+// A throwaway that opens nothing anywhere.
+const TOKEN = 'test-token-root';
+const BEARER = `Bearer ${TOKEN}`;
+const METHOD = { get: 'GET', delete: 'DELETE' } as const;
+// The member the recorded revoke answers for.
+const REVOKED = 'temp';
+// The bridge's answer to a member who is not an admin, the same on every admin-only route.
+const ADMIN_ONLY = 'members-forbidden';
+// The admin, under a display name unlike the handle, so the panel can know who is signed in only by the handle.
+const ADMIN_ME: Me = { ...parseMe(body('me-admin')), display_name: 'Flan' };
+const MEMBER_ME: Me = parseMe(body('me-computational'));
+
+interface Sent {
+  readonly method: string;
+  readonly path: string;
+  readonly url: string;
+  readonly authorization: string | null;
+}
+
+const replay = (name: string): Response => Response.json(body(name), { status: exchange(name).status });
+const sentTo = (sent: readonly Sent[], ...paths: string[]): Sent[] => sent.filter((request) => paths.includes(request.path));
+
+/**
+ * The bridge as a stub fetch: no repositories, so no page or stream is asked for; the member and
+ * admin routes answered from the recordings; and, as the bridge does, a 401 for anything sent
+ * without the token.
+ */
+function stubBridge(member: Me) {
+  const sent: Sent[] = [];
+  const admin = member.role === 'admin';
+  const fetch = async (url: string, init: RequestInit): Promise<Response> => {
+    const method = init.method ?? METHOD.get;
+    const { pathname: path } = new URL(url, 'http://bridge.test');
+    const authorization = new Headers(init.headers).get('authorization');
+    sent.push({ method, path, url, authorization });
+    if (authorization !== BEARER) return replay('me-unauthenticated');
+    switch (`${method} ${path}`) {
+      case `${METHOD.get} ${ROUTES.me}`:
+        return Response.json(member);
+      case `${METHOD.get} ${ROUTES.directory}`:
+        return replay('directory');
+      case `${METHOD.get} ${ROUTES.repos}`:
+        return Response.json({ repos: [] });
+      case `${METHOD.get} ${ROUTES.members}`:
+        return replay(admin ? 'members-list' : ADMIN_ONLY);
+      case `${METHOD.get} ${ROUTES.audit}`:
+        return replay(admin ? 'audit' : ADMIN_ONLY);
+      case `${METHOD.delete} ${ROUTES.member(REVOKED)}`:
+        return replay(admin ? 'members-revoke' : ADMIN_ONLY);
+      default:
+        return replay('not-found');
+    }
+  };
+  return { sent, fetch };
+}
+
+/** The app as main.tsx assembles it, over the real store and the stub bridge, signed in with the token. */
+async function signInOverBridge(member: Me) {
+  const bridge = stubBridge(member);
+  const services = createServices({ fetch: bridge.fetch, clock: new ManualClock(AFTER_RECORDINGS), notificationApi: null, storage: null });
+  made.push(services);
+  const themeManager = createThemeManager({ root: document.documentElement, getStorage: () => null });
+  render(<AppRoot services={services} themeManager={themeManager} />);
+  await settle();
+  let accepted = false;
+  await act(async () => {
+    accepted = await services.store.signIn(TOKEN);
+  });
+  expect(accepted).toBe(true);
+  await settle();
+  return { bridge, user: setupUser() };
+}
+
+/** Signed in as the admin, with the Admin entry open and its lists answered. */
+async function openAdminOverBridge() {
+  const signedIn = await signInOverBridge(ADMIN_ME);
+  await signedIn.user.click(nav().getByRole('button', { name: 'Admin' }));
+  await settle();
+  return signedIn;
+}
 
 describe('the session, from the store into the shell', () => {
   it('shows the sign-in form after a plain 401, and the Chat view once the store accepts the token', async () => {
@@ -147,10 +232,55 @@ describe('the registry\'s real views', () => {
     expect(within(screen.getByRole('list', { name: 'Agents' })).getByText('codex')).toBeTruthy();
   });
 
-  it('Admin: still the placeholder until the admin panel is wired in (T10b)', async () => {
-    const { user } = setup({ as: 'flan' });
-    await user.click(nav().getByRole('button', { name: 'Admin' }));
+  it('Admin: shows an admin the panel, with the Members table the Api\'s /v1/members answered', async () => {
+    await openAdminOverBridge();
     expect(heading()).toBe('Admin');
+    const handles = within(screen.getByRole('table', { name: 'Members' }))
+      .getAllByRole('rowheader')
+      .map((cell) => cell.textContent);
+    expect(handles).toEqual(parseMembers(body('members-list')).members.map((member) => member.handle));
+    expect(screen.getByRole('table', { name: 'Audit log' })).toBeTruthy();
+  });
+
+  it('Admin: the panel\'s requests carry the token the store holds, in the header only', async () => {
+    const { bridge } = await openAdminOverBridge();
+    expect(sentTo(bridge.sent, ROUTES.members, ROUTES.audit)).toEqual([
+      { method: METHOD.get, path: ROUTES.members, url: ROUTES.members, authorization: BEARER },
+      { method: METHOD.get, path: ROUTES.audit, url: `${ROUTES.audit}?${QUERY.limit}=${AUDIT_LIMIT}`, authorization: BEARER },
+    ]);
+    expect(bridge.sent.some((request) => request.url.includes(TOKEN))).toBe(false);
+  });
+
+  it('Admin: a change made in the panel makes the store ask for the directory again', async () => {
+    const { bridge, user } = await openAdminOverBridge();
+    await user.click(screen.getByRole('button', { name: `Revoke ${REVOKED}` }));
+    await user.click(within(screen.getByRole('dialog', { name: `Revoke ${REVOKED}?` })).getByRole('button', { name: 'Revoke' }));
+    await settle();
+    const revoked = bridge.sent.findIndex((request) => request.method === METHOD.delete && request.path === ROUTES.member(REVOKED));
+    expect(revoked).toBeGreaterThan(-1);
+    expect(sentTo(bridge.sent.slice(revoked + 1), ROUTES.directory)).toEqual([
+      { method: METHOD.get, path: ROUTES.directory, url: ROUTES.directory, authorization: BEARER },
+    ]);
+  });
+
+  it('Admin: the panel is told the signed-in member\'s handle, so revoking one\'s own account says so', async () => {
+    const { bridge, user } = await openAdminOverBridge();
+    await user.click(screen.getByRole('button', { name: `Revoke ${ADMIN_ME.handle}` }));
+    const dialog = within(screen.getByRole('dialog', { name: `Revoke ${ADMIN_ME.handle}?` }));
+    expect(dialog.getByText('This is your own account, so your access ends at once.')).toBeTruthy();
+    await user.click(dialog.getByRole('button', { name: 'Cancel' }));
+    expect(bridge.sent.some((request) => request.method === METHOD.delete)).toBe(false);
+  });
+
+  it('Admin: a member who is not an admin has no Admin entry, and nothing asks for the members or the audit', async () => {
+    const { bridge } = await signInOverBridge(MEMBER_ME);
+    expect(nav().getAllByRole('button').map((button) => button.textContent)).toEqual(['Chat', 'Board', 'Members']);
+    expect(sentTo(bridge.sent, ROUTES.members, ROUTES.audit)).toEqual([]);
+  });
+
+  it('Admin, wired: axe finds no violation in its structure', async () => {
+    await openAdminOverBridge();
+    await expectNoAxeViolations();
   });
 
   it('Board: asks for the selected repository through the services\' Api and refreshes on their clock', async () => {

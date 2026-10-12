@@ -10,8 +10,8 @@ export interface Services {
   readonly store: Store;
   /**
    * The Api the store sends its own requests through, for the views that call the bridge themselves
-   * (the Board, and the Admin panel once it is wired). It reads the token from the store's closure on
-   * every request and keeps no copy, so the token stays where the store put it and nowhere else.
+   * (the Board and the Admin panel). It reads the token from the store's closure on every request and
+   * keeps no copy, so the token stays where the store put it and nowhere else.
    */
   readonly api: Api;
   readonly notifier: Notifier;
