@@ -1,0 +1,117 @@
+/*
+ * Board view. Colours, sizes and spacing come from the tokens (styles/tokens.css); nothing here names a
+ * colour, and only pairs that tokens.test.ts checks are used: text, muted text and borders on the page
+ * and surface backgrounds. Selectors stay at one class so the shared stylesheets keep their meaning.
+ */
+
+/* A message that is a direct child of the view sits one grid gap from its neighbours, so it needs no margin of its own. */
+.board > .alert {
+  margin: 0;
+}
+
+.board__toolbar {
+  column-gap: var(--space-4);
+}
+
+.board__updated {
+  margin: 0;
+}
+
+/* Sections stack with the grid's gap; inside one, the last block adds no margin of its own. */
+.board__section {
+  min-inline-size: 0;
+}
+
+.board__section > :last-child {
+  margin-block-end: 0;
+}
+
+.board__scroll {
+  margin-block-end: var(--space-3);
+}
+
+/* Wide enough to read; a narrower screen scrolls the table sideways inside its focusable region. */
+.board__table {
+  min-inline-size: 40rem;
+}
+
+/*
+ * A cell asks for at most this much width, so one very long word cannot squeeze the other columns
+ * down to a few letters (the table's automatic layout shares out the width by how much each column
+ * wants); the word wraps inside its own cell instead. `break-word`, not `anywhere`: the latter makes
+ * every word breakable in the column's minimum width, and it is the short columns that would be
+ * squeezed and broken in the middle of "Harness".
+ */
+.board__table th,
+.board__table td {
+  max-inline-size: 22rem;
+  overflow-wrap: break-word;
+}
+
+/* A date and a task id are read as one piece; a break inside them is noise. */
+.board time,
+.board__id {
+  white-space: nowrap;
+}
+
+/* A row header is a label, not a column header: no tint, so the header row is the one that stands out. */
+.board__table tbody th {
+  background: var(--color-surface);
+  font-weight: 600;
+}
+
+.board__cell-note {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* Open questions, notes and handoffs. */
+.board-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+}
+
+.board-item {
+  min-inline-size: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.board-item__head {
+  margin: 0 0 var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.board-item__who {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+/* The text is the author's own: line breaks are kept, and a long word wraps instead of widening the page. */
+.board-item__text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Forced colours (Windows high contrast and similar) replace the author's colours. Audit tools still
+ * read the muted grey that was written and compare it with the forced background (found by axe in
+ * real Chromium with forced colours emulated), so the muted text says its system colour, as the
+ * shell's .field__hint does.
+ */
+@media (forced-colors: active) {
+  .board-item__head,
+  .board__cell-note {
+    color: CanvasText;
+  }
+}

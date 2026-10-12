@@ -1,0 +1,57 @@
+/*
+ * Members view. Colours, sizes and spacing come from the tokens (styles/tokens.css); nothing here names
+ * a colour, and only pairs that tokens.test.ts checks are used: text, muted text and borders on the
+ * surface background.
+ */
+
+.members__agents {
+  min-inline-size: 0;
+}
+
+/* The shell's hint has no margin; here it sits above a list and needs a little air. */
+.members__hint {
+  margin-block-end: var(--space-2);
+}
+
+.members__list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A row per member: name, handle and kind badge wrap onto further lines rather than widen the page. */
+.members__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-inline-size: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow-wrap: anywhere;
+}
+
+.members__name {
+  font-weight: 700;
+}
+
+.members__handle {
+  color: var(--color-text-muted);
+}
+
+/*
+ * Forced colours (Windows high contrast and similar) replace the author's colours. Audit tools still
+ * read the muted grey that was written and compare it with the forced background (found by axe in
+ * real Chromium with forced colours emulated), so the muted text says its system colour, as the
+ * shell's .field__hint does.
+ */
+@media (forced-colors: active) {
+  .members__handle {
+    color: CanvasText;
+  }
+}
