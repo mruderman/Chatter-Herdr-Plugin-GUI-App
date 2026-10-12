@@ -134,9 +134,9 @@ export interface AgentTask {
 
 /**
  * A Herdr agent as Chatter's `agents --all --json` reports it. The bridge passes Chatter's object
- * through unchanged; the guard keeps only these fields, which drops the host paths (`cwd`,
- * `repo_root`) that the bridge shows every member here, and turns Chatter's zoneless UTC times
- * into ISO.
+ * through for an admin and, for anyone else, only the keys without a host path (`MEMBER_AGENT_KEYS`
+ * in bridge/src/server.js). The guard keeps only these fields either way, so `cwd` and `repo_root`
+ * never reach a view, and turns Chatter's zoneless UTC times into ISO.
  */
 export interface BoardAgent {
   readonly name: string;
