@@ -76,7 +76,7 @@ All routes return JSON; errors are `{"error":{"code","message"}}`. `GET /healthz
 | `GET /v1/repos/{key}/messages?after_id&before_id&limit` | `{repo, epoch, messages, has_more, max_id}`; at most 500; oldest first |
 | `POST /v1/repos/{key}/messages` | body `{to:"#chat"\|handle, body}` returns 201 `{id, pushed, warnings, mentioned_members, delivery}` |
 | `GET /v1/repos/{key}/stream` | server-sent events: `hello {epoch, max_id}`, `message` (id = message id), `bye {reason}`; resume with `Last-Event-ID` or `?after_id` |
-| `GET /v1/repos/{key}/board` | `{agents, agents_error, tasks, notes, questions, handoffs}` |
+| `GET /v1/repos/{key}/board` | `{agents, agents_error, tasks, notes, questions, handoffs}`; for a non-admin each agent row keeps only the non-path keys (no `repo_root`, no `cwd`), as `/v1/repos` hides `repo_root` from non-admins (F15) |
 | `POST /v1/repos/{key}/read` | body `{up_to_id}`; pointer only moves forward |
 | `/v1/members` (admin) | `GET` list; `POST` add (computational members get a token); `PATCH /{h}`; `DELETE /{h}` revoke; `POST /{h}/token` rotate |
 | `GET /v1/audit` (admin) | pushes into agents, `@everyone`, registry changes |
