@@ -1,0 +1,74 @@
+/*
+ * The Admin view. It uses only the design system's tokens and shared classes (stack, cluster, field,
+ * badge, alert, tone-*, table-scroll, dialog__actions, visually-hidden): no colour literal, no remote
+ * file, nothing fixed or sticky. Keep it that way; admin-styles.test.ts checks it.
+ */
+
+/* The heading and "Add member" sit on one line and wrap on a narrow screen. */
+.admin-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+
+.admin-bar h2 {
+  margin: 0;
+}
+
+/* A row's handle is a row header for assistive technology, but it should look like the data it is. */
+.admin-table tbody th {
+  background: transparent;
+  font-weight: 600;
+}
+
+.admin-table time {
+  white-space: nowrap;
+}
+
+/* The row buttons stay in one line. A table too wide for a 320 px screen scrolls inside its own region, and
+   buttons stacked in a narrow column would only make every row three buttons tall. */
+.admin-table .cluster {
+  flex-wrap: nowrap;
+}
+
+/* Detail is free text and can be long; it wraps instead of widening the page, but never to a sliver. */
+.admin-detail {
+  min-inline-size: 12rem;
+  overflow-wrap: anywhere;
+}
+
+/* The stack's gap already separates things; the shared alert's own bottom margin would double it. */
+.admin .alert {
+  margin: 0;
+}
+
+/*
+ * Field errors. The words are the signal; the heavier border and the bold text repeat it for sighted
+ * people, and the colour is a third cue, never the only one.
+ */
+.field__error {
+  margin: 0;
+  color: var(--tone-danger-text);
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+}
+
+.admin input[aria-invalid='true'] {
+  border-width: 4px;
+  border-color: var(--color-danger-solid);
+}
+
+/*
+ * The token is read, selected and copied by hand: monospace, the whole field width, and wrapped so that
+ * all of it shows at once (a field that scrolls sideways would hide the start or the end of it).
+ */
+.token-field {
+  inline-size: 100%;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  resize: none;
+  /* Where it is supported the field grows to fit the token at any width or text size; rows covers the rest. */
+  field-sizing: content;
+}
