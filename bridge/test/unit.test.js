@@ -65,15 +65,16 @@ test('policy: addressing agents follows the member flag; admin always may', () =
   const off = member({ can_address_agents: false });
   refused(() => checkWrite({ member: off, to: '#chat', body: 'hey @codex', ...ctx }), 'agents_not_allowed');
   refused(() => checkWrite({ member: off, to: 'codex', body: 'hey', ...ctx }), 'agents_not_allowed');
-  assert.deepEqual(checkWrite({ member: member(), to: '#chat', body: 'hey @codex @grace', ...ctx }).agentTargets, ['codex']);
+  // @grace is a member, not an agent: the restricted member may still mention her.
+  assert.equal(checkWrite({ member: off, to: '#chat', body: 'hey @grace', ...ctx }).mode, 'post');
   assert.deepEqual(checkWrite({ member: member(), to: '#chat', body: 'hey @codex @grace', ...ctx }).memberTargets, ['grace']);
   assert.equal(checkWrite({ member: { ...admin, can_address_agents: false }, to: 'pi', body: 'x', ...ctx }).toAgent, true);
   // a member with the flag off may still talk to other members
   assert.equal(checkWrite({ member: off, to: 'grace', body: 'hello', ...ctx }).toMember, true);
 });
 
-// T13 item 3. Chatter resolves a name it does not know exactly to the one roster name it begins (case-insensitive).
-test('policy: a name that begins a live agent name of the repo counts as that agent, fail closed', () => {
+// T13 item 3. Chatter resolves a name it does not know exactly to the one roster name it is the start of (case-insensitive).
+test('policy: a name that is the start of a live agent name of the repo counts as that agent, fail closed', () => {
   const p = {
     agentNames: new Set(['codex-worker', 'grace-worker', 'old']),
     memberHandles: new Set(['flan', 'thom', 'grace', 'zed', 'zedd']),
@@ -86,12 +87,47 @@ test('policy: a name that begins a live agent name of the repo counts as that ag
   // "old" is an agent name, but not of a live agent of this repo: only an exact match counts for it.
   assert.equal(checkWrite({ member: off, to: '#chat', body: '@zed @old-ish', ...p }).mode, 'post');
   refused(() => checkWrite({ member: off, to: '#chat', body: '@old', ...p }), 'agents_not_allowed');
-  assert.deepEqual(checkWrite({ member: member(), to: '#chat', body: 'hi @codex @zed', ...p }).agentTargets, ['codex']);
+  refused(() => checkWrite({ member: off, to: '#chat', body: 'hi @zed @codex', ...p }), 'agents_not_allowed');
+  assert.equal(checkWrite({ member: member(), to: '#chat', body: 'hi @codex @zed', ...p }).mode, 'post');
   for (const who of [member(), admin]) refused(() => checkWrite({ member: who, to: 'grace', body: 'x', ...p }), 'ambiguous_recipient');
   refused(() => checkWrite({ member: member({ handle: 'zedd' }), to: 'zed', body: 'x', ...p }), 'ambiguous_recipient');
   assert.equal(checkWrite({ member: member({ handle: 'zed' }), to: 'zedd', body: 'x', ...p }).to, 'zedd');
   assert.equal(checkWrite({ member: member(), to: 'zed', body: 'x', ...p }).toMember, true);
   assert.equal(checkWrite({ member: member(), to: 'codex-worker', body: 'x', ...p }).toAgent, true);
+});
+
+// T13c item 5. Chatter resolves a DM against the roster of the repo it is sent in: a name that is not a live
+// agent's exactly goes to the one live name it is the start of.
+test('policy: a DM to an agent name counts as that agent only if it is a live name of the repo', () => {
+  const p = { agentNames: new Set(['codex-worker', 'cod', 'zz-old', 'ren']), repoAgents: ['codex-worker'], memberHandles: new Set(['flan', 'thom']) };
+  // Ambiguity is decided before permission, and for an admin too.
+  for (const who of [member(), admin, member({ can_address_agents: false })]) {
+    refused(() => checkWrite({ member: who, to: 'cod', body: 'x', ...p }), 'ambiguous_recipient');
+  }
+  assert.equal(checkWrite({ member: member(), to: 'codex-worker', body: 'x', ...p }).toAgent, true);
+  assert.equal(checkWrite({ member: member(), to: 'zz-old', body: 'x', ...p }).toAgent, true, 'no live name begins with it: as before');
+  refused(() => checkWrite({ member: member({ can_address_agents: false }), to: 'zz-old', body: 'x', ...p }), 'agents_not_allowed');
+  // An exact name in one repo is only the start of a name in another.
+  assert.equal(checkWrite({ member: member(), to: 'ren', body: 'x', ...p, repoAgents: ['ren'] }).toAgent, true);
+  refused(() => checkWrite({ member: member(), to: 'ren', body: 'x', ...p, repoAgents: ['renata'] }), 'ambiguous_recipient');
+  // Case does not matter to Chatter once it compares by prefix.
+  assert.equal(checkWrite({ member: member(), to: 'ren', body: 'x', ...p, repoAgents: ['Ren'] }).toAgent, true);
+  refused(() => checkWrite({ member: member(), to: 'cod', body: 'x', ...p, repoAgents: ['CODEX'] }), 'ambiguous_recipient');
+});
+
+// T13c item 7. The predicate is that the agent's name begins with the handle, so the message says it that way.
+test('policy: a prefix refusal says the handle is the start of the name', () => {
+  const p = { agentNames: new Set(['codex-worker', 'grace-worker']), repoAgents: ['codex-worker', 'grace-worker'], memberHandles: new Set(['thom', 'grace', 'zed', 'zedd']) };
+  const message = (fn) => {
+    try { fn(); } catch (e) { return e.message; }
+    return assert.fail('expected a refusal');
+  };
+  assert.match(message(() => checkWrite({ member: member({ can_address_agents: false }), to: '#chat', body: '@codex', ...p })),
+    /^@codex is the start of the name of the Herdr agent codex-worker, /);
+  assert.match(message(() => checkWrite({ member: member(), to: 'grace', body: 'x', ...p })),
+    /^"grace" is the start of the name of the Herdr agent grace-worker, /);
+  assert.match(message(() => checkWrite({ member: member({ handle: 'zedd' }), to: 'zed', body: 'x', ...p })),
+    /^"zed" is the start of your own handle, /);
 });
 
 test('policy: DM recipients and body limits', () => {
@@ -127,7 +163,8 @@ test('store: members, tokens, revocation, last-admin protection', () => {
   refused(() => s.addMember({ handle: 'y', kind: 'human', tailscale_login: 'flan@example.com' }), 'login_taken');
 
   const t1 = s.issueToken('thom');
-  assert.match(t1, /^cb_/);
+  // assert.ok, not assert.match: a failing match would print the token.
+  assert.ok(/^cb_/.test(t1), 'a token starts with cb_');
   assert.equal(s.memberByToken(t1).handle, 'thom');
   const t2 = s.issueToken('thom'); // rotation kills the old token
   assert.equal(s.memberByToken(t1), null);

@@ -46,6 +46,10 @@ function checkKind(kind) {
 function checkRole(role) {
   if (!['admin', 'member'].includes(role)) throw new HttpError(400, 'bad_role', 'role must be admin or member');
 }
+// Stored as truthiness, so without this the string "false" would let a member address agents.
+function checkAgentsFlag(value) {
+  if (typeof value !== 'boolean') throw new HttpError(400, 'bad_request', 'can_address_agents must be true or false');
+}
 
 const toMember = (r) => (r ? ({
   handle: r.handle,
@@ -95,6 +99,7 @@ export class Store {
     if (handle === 'everyone') throw new HttpError(400, 'bad_handle', '"everyone" is reserved');
     checkKind(kind);
     checkRole(role);
+    checkAgentsFlag(can_address_agents);
     if (this.getMember(handle)) throw new HttpError(409, 'handle_taken', `member "${handle}" already exists`);
     if (tailscale_login && this.memberByLogin(tailscale_login)) {
       throw new HttpError(409, 'login_taken', 'that Tailscale login is already mapped to a member');
@@ -142,6 +147,7 @@ export class Store {
     }
     checkKind(next.kind);
     checkRole(next.role);
+    if ('can_address_agents' in patch) checkAgentsFlag(patch.can_address_agents);
     const holder = next.tailscale_login ? this.memberByLogin(next.tailscale_login) : null;
     if (holder && holder.handle !== handle) {
       throw new HttpError(409, 'login_taken', 'that Tailscale login is already mapped to a member');

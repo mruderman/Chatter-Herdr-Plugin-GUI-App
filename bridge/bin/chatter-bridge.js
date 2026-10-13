@@ -119,19 +119,24 @@ async function main() {
       }
       return;
     }
+    // Each change below and its audit entry are one transaction, as in the HTTP routes: a failure changes nothing.
     if (sub === 'set') {
       const patch = {};
       if (args.agents) patch.can_address_agents = args.agents === 'on';
       if (args.name) patch.display_name = args.name;
       if (args.login) patch.tailscale_login = args.login;
-      store.updateMember(handle, patch);
-      store.audit({ actor: 'cli', action: 'member_update', target: handle, detail: patch });
+      store.transaction(() => {
+        store.updateMember(handle, patch);
+        store.audit({ actor: 'cli', action: 'member_update', target: handle, detail: patch });
+      });
       console.log(`member "${handle}" updated`);
       return;
     }
     if (sub === 'revoke') {
-      store.revokeMember(handle);
-      store.audit({ actor: 'cli', action: 'member_revoke', target: handle });
+      store.transaction(() => {
+        store.revokeMember(handle);
+        store.audit({ actor: 'cli', action: 'member_revoke', target: handle });
+      });
       console.log(`member "${handle}" revoked (open streams close within seconds)`);
       return;
     }
@@ -140,8 +145,12 @@ async function main() {
   if (cmd === 'token' && sub === 'rotate') {
     const handle = rest[0];
     if (!handle) fail('member handle required');
-    const t = store.issueToken(handle);
-    store.audit({ actor: 'cli', action: 'token_rotate', target: handle });
+    // One transaction with its audit entry: a failure leaves the old token working.
+    const t = store.transaction(() => {
+      const issued = store.issueToken(handle);
+      store.audit({ actor: 'cli', action: 'token_rotate', target: handle });
+      return issued;
+    });
     console.log(`new token for "${handle}" (shown once; the old one stopped working):\n${t}`);
     return;
   }

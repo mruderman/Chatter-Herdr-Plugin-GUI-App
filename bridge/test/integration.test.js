@@ -155,9 +155,11 @@ describe('bridge against Chatter CLI', { skip: !haveChatter && 'set CHATTER_JS t
     assert.equal(clash.body.error.code, 'handle_is_agent');
     const ok = await e.api('flan', 'POST', '/v1/members', { handle: 'ezra', kind: 'computational', display_name: 'Ezra' });
     assert.equal(ok.status, 201);
-    assert.match(ok.body.token, /^cb_/);
+    // assert.ok throughout: a failing match or notEqual would print the tokens.
+    assert.ok(/^cb_/.test(ok.body.token), 'the new member has a token');
     const rot = await e.api('flan', 'POST', '/v1/members/ezra/token');
-    assert.notEqual(rot.body.token, ok.body.token);
+    assert.ok(/^cb_/.test(rot.body.token), 'the rotation answers a token');
+    assert.ok(rot.body.token !== ok.body.token, 'the rotated token differs');
     assert.equal((await e.api(ok.body.token, 'GET', '/v1/me')).status, 401, 'old token is dead');
     assert.equal((await e.api(rot.body.token, 'GET', '/v1/me')).body.handle, 'ezra');
     const dir = (await e.api('thom', 'GET', '/v1/directory')).body;
