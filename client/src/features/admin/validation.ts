@@ -53,9 +53,9 @@ export function addMemberRequest(values: MemberFormValues): AddMemberRequest {
 }
 
 /**
- * Only the fields that differ from `member`. The bridge writes the audit entry from what it was sent,
- * so sending everything would log changes that did not happen, and an empty patch is logged too
- * (observed), so the caller refuses to send one.
+ * Only the fields that differ from `member`. The bridge's audit entry lists the fields it was sent, so
+ * sending everything would log changes that did not happen. It refuses an empty patch (400), and the
+ * caller does not send one.
  */
 export function memberPatch(member: Member, values: MemberFormValues): UpdateMemberRequest {
   const patch: {

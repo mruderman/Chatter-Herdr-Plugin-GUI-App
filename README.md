@@ -2,7 +2,7 @@
 
 A bridge and web client that give every Cyan Society member, human or computational, a graphical group chat on top of the [Chatter](https://github.com/marcvermeeren/chatter) plugin for [Herdr](https://herdr.dev), reached over Tailscale.
 
-**Status:** milestone M2 (the bridge) is built and tested. The web client (M3), offline archive and Markdown export (M4) and packaging (M5) are not started. The specification lives in the project's Claude Doc, "Chatter GUI: Specification v0.1".
+**Status:** milestone M2 (the bridge) is built and tested, and the web client core (M3) is built and passes its gate scenarios; it is in final review. The offline archive and Markdown export (M4) and packaging (M5) are not started. The specification lives in the project's Claude Doc, "Chatter GUI: Specification v0.1".
 
 ## What is here
 
