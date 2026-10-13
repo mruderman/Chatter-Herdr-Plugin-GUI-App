@@ -1,6 +1,6 @@
 // @vitest-environment node
-// A direct message that the bridge refuses with 409 `ambiguous_recipient` (the handle begins an agent's
-// name, or the sender's own handle, so Chatter could deliver it to the wrong one; bridge/src/policy.js)
+// A direct message that the bridge refuses with 409 `ambiguous_recipient` (the handle is the start of an
+// agent's name, or of the sender's own handle, so Chatter could deliver it to the wrong one; bridge/src/policy.js)
 // has to reach the member the way every refusal does: the real store's send resolves false with the
 // bridge's own code and message in `sendError`, which the composer shows as "Not sent: ..." and keeps the
 // draft for (composer.test.tsx, "keeps the draft and shows the bridge's refusal"). The scripted bridge
@@ -18,8 +18,8 @@ const FIVE_MINUTES = 5 * 60_000;
 const MIRA = 'mira';
 
 // The two refusals of bridge/src/policy.js, worded as it words them for this handle.
-const BEGINS_AN_AGENT = '"mira" begins the name of the Herdr agent mira-worker, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.';
-const BEGINS_OWN_HANDLE = '"mira" begins your own handle, so Chatter would take it for you; nothing was sent. mira can still message you, or an admin can rename one of you.';
+const START_OF_AN_AGENT = '"mira" is the start of the name of the Herdr agent mira-worker, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.';
+const START_OF_OWN_HANDLE = '"mira" is the start of your own handle, so Chatter would take it for you; nothing was sent. mira can still message you, or an admin can rename one of you.';
 
 const stores: Store[] = [];
 
@@ -58,8 +58,8 @@ const refusedAs = (message: string): ApiError => new ApiError(409, ERROR_CODES.a
 
 describe('a direct message refused as ambiguous_recipient', () => {
   it.each([
-    ['begins the name of an agent', BEGINS_AN_AGENT],
-    ['begins the sender\'s own handle', BEGINS_OWN_HANDLE],
+    ['is the start of the name of an agent', START_OF_AN_AGENT],
+    ['is the start of the sender\'s own handle', START_OF_OWN_HANDLE],
   ])('when the handle %s, comes back as the Send error in the bridge\'s own words, and nothing else changes', async (_why, message) => {
     const h = await harness();
     const before = h.now();
@@ -79,18 +79,18 @@ describe('a direct message refused as ambiguous_recipient', () => {
 
   it('is asked once and not retried by the store, however long it waits', async () => {
     const h = await harness();
-    h.bridge.failNext(BRIDGE_ROUTES.send, refusedAs(BEGINS_AN_AGENT));
+    h.bridge.failNext(BRIDGE_ROUTES.send, refusedAs(START_OF_AN_AGENT));
     expect(await h.store.send({ to: MIRA, body: 'once' })).toBe(false);
     expect(h.sends()).toBe(1);
     h.clock.advance(FIVE_MINUTES);
     await settle();
     expect(h.sends()).toBe(1);
-    expect(h.now().sendError).toEqual({ code: 'ambiguous_recipient', message: BEGINS_AN_AGENT });
+    expect(h.now().sendError).toEqual({ code: 'ambiguous_recipient', message: START_OF_AN_AGENT });
   });
 
   it('is cleared by the next send, which goes through', async () => {
     const h = await harness();
-    h.bridge.failNext(BRIDGE_ROUTES.send, refusedAs(BEGINS_AN_AGENT));
+    h.bridge.failNext(BRIDGE_ROUTES.send, refusedAs(START_OF_AN_AGENT));
     expect(await h.store.send({ to: MIRA, body: 'first try' })).toBe(false);
     expect(h.now().sendError).not.toBeNull();
 

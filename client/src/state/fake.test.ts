@@ -334,7 +334,7 @@ describe('fake store: mentions are read as the bridge reads them', () => {
 });
 
 // bridge/src/policy.js, checkWrite. The recorded directory has the agent "codex" and no member whose
-// handle begins it or is the start of another member's, so the tests add members the way the admin
+// handle is the start of it or the start of another member's, so the tests add members the way the admin
 // panel would, and the fake takes them up on a refresh.
 async function withMembers(f: ReturnType<typeof fake>, ...handles: string[]): Promise<void> {
   const { members, agents } = parseDirectory(body('directory'));
@@ -342,9 +342,9 @@ async function withMembers(f: ReturnType<typeof fake>, ...handles: string[]): Pr
   await f.store.refreshDirectory();
 }
 
-const BEGINS_AN_AGENT_IN_POST = (handle: string): string => `@${handle} begins the name of the Herdr agent codex, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`;
-const BEGINS_AN_AGENT_IN_DM = (handle: string): string => `"${handle}" begins the name of the Herdr agent codex, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`;
-const BEGINS_OWN_HANDLE = (handle: string): string => `"${handle}" begins your own handle, so Chatter would take it for you; nothing was sent. ${handle} can still message you, or an admin can rename one of you.`;
+const START_OF_AN_AGENT_IN_POST = (handle: string): string => `@${handle} is the start of the name of the Herdr agent codex, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`;
+const START_OF_AN_AGENT_IN_DM = (handle: string): string => `"${handle}" is the start of the name of the Herdr agent codex, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`;
+const START_OF_OWN_HANDLE = (handle: string): string => `"${handle}" is the start of your own handle, so Chatter would take it for you; nothing was sent. ${handle} can still message you, or an admin can rename one of you.`;
 
 describe('fake store: addressing, decided as the bridge decides it', () => {
   it.each([
@@ -353,10 +353,10 @@ describe('fake store: addressing, decided as the bridge decides it', () => {
     ['@co please', 'co'],
     ['@c', 'c'],
     ['hi @Kieran and @cod', 'cod'],
-  ] as const)('refuses a member who may not address agents %j, as it begins the name of the agent codex', async (text, begun) => {
+  ] as const)('refuses a member who may not address agents %j, as it is the start of the name of the agent codex', async (text, begun) => {
     const f = fake({ as: 'kieran' });
     expect(await f.store.send({ to: CHANNEL, body: text })).toBe(false);
-    expect(f.now().sendError).toEqual({ code: 'agents_not_allowed', message: BEGINS_AN_AGENT_IN_POST(begun) });
+    expect(f.now().sendError).toEqual({ code: 'agents_not_allowed', message: START_OF_AN_AGENT_IN_POST(begun) });
     expect(f.store.sent).toEqual([]);
   });
 
@@ -389,7 +389,7 @@ describe('fake store: addressing, decided as the bridge decides it', () => {
     expect(await f.store.send({ to: CHANNEL, body: 'ask @sage' })).toBe(false);
     expect(f.now().sendError).toEqual({
       code: 'agents_not_allowed',
-      message: '@sage begins the name of the Herdr agent Sage-Worker, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted',
+      message: '@sage is the start of the name of the Herdr agent Sage-Worker, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted',
     });
     expect(await f.store.send({ to: 'sage', body: 'hello' })).toBe(false);
     expect(f.now().sendError?.code).toBe('ambiguous_recipient');
@@ -401,7 +401,7 @@ describe('fake store: addressing, decided as the bridge decides it', () => {
     f.store.setDirectory({ members, agents: ['ivy-one', 'ivy-two', 'pip'] });
     await f.store.refreshDirectory();
     expect(await f.store.send({ to: CHANNEL, body: 'ask @ivy' })).toBe(false);
-    expect(f.now().sendError?.message).toBe('@ivy begins the name of the Herdr agent ivy-one, ivy-two, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted');
+    expect(f.now().sendError?.message).toBe('@ivy is the start of the name of the Herdr agent ivy-one, ivy-two, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted');
   });
 
   it.each(['@everyone hi', '@Everyone hi', '@EVERYONE hi', '@everyoneX hi', 'mail a@everyone'])('refuses a member\'s %j as an @everyone', async (text) => {
@@ -423,12 +423,12 @@ describe('fake store: addressing, decided as the bridge decides it', () => {
     expect(f.now().sendError?.code).toBe('everyone_admin_only');
   });
 
-  it.each(['kieran', 'thom', 'flan'] as const)('refuses %s a direct message to a member whose handle begins the name of an agent, with 409', async (as) => {
+  it.each(['kieran', 'thom', 'flan'] as const)('refuses %s a direct message to a member whose handle is the start of the name of an agent, with 409', async (as) => {
     const f = fake({ as });
     await withMembers(f, 'cod');
     const before = f.now().messages;
     expect(await f.store.send({ to: 'cod', body: 'for cod, not for codex' })).toBe(false);
-    expect(f.now().sendError).toEqual({ code: 'ambiguous_recipient', message: BEGINS_AN_AGENT_IN_DM('cod') });
+    expect(f.now().sendError).toEqual({ code: 'ambiguous_recipient', message: START_OF_AN_AGENT_IN_DM('cod') });
     expect(f.now().messages).toEqual(before);
     expect(f.store.sent).toEqual([]);
     expect(f.labels()).not.toContain('DM with cod');
@@ -442,11 +442,11 @@ describe('fake store: addressing, decided as the bridge decides it', () => {
     const f = fake({ as });
     await withMembers(f, prefix);
     expect(await f.store.send({ to: prefix, body: 'hello?' })).toBe(false);
-    expect(f.now().sendError).toEqual({ code: 'ambiguous_recipient', message: BEGINS_OWN_HANDLE(prefix) });
+    expect(f.now().sendError).toEqual({ code: 'ambiguous_recipient', message: START_OF_OWN_HANDLE(prefix) });
     expect(f.store.sent).toEqual([]);
   });
 
-  it('writes a direct message to a member no agent name and no sender handle begins with', async () => {
+  it('writes a direct message to a member that is the start of no agent name and no sender handle', async () => {
     const f = fake({ as: 'kieran' });
     await withMembers(f, 'zed');
     expect(await f.store.send({ to: 'zed', body: 'for zed' })).toBe(true);

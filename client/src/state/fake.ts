@@ -188,19 +188,23 @@ const STATUS = { badRequest: 400, forbidden: 403, notFound: 404, conflict: 409 }
 // The bridge's words for the refusals the prefix rules add. The handle or the agent names are the only
 // parts that vary, so a view test shows the text a member would read.
 const ambiguity = {
-  mention: (handle: string, names: readonly string[]): string => `@${handle} begins the name of the Herdr agent ${names.join(', ')}, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`,
-  dmToAgentName: (handle: string, names: readonly string[]): string => `"${handle}" begins the name of the Herdr agent ${names.join(', ')}, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`,
-  dmToOwnHandle: (handle: string): string => `"${handle}" begins your own handle, so Chatter would take it for you; nothing was sent. ${handle} can still message you, or an admin can rename one of you.`,
+  mention: (handle: string, names: readonly string[]): string => `@${handle} is the start of the name of the Herdr agent ${names.join(', ')}, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`,
+  dmToAgentName: (handle: string, names: readonly string[]): string => `"${handle}" is the start of the name of the Herdr agent ${names.join(', ')}, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`,
+  dmToOwnHandle: (handle: string): string => `"${handle}" is the start of your own handle, so Chatter would take it for you; nothing was sent. ${handle} can still message you, or an admin can rename one of you.`,
 };
 
 /**
  * The bridge's checkWrite (bridge/src/policy.js), in its order. Null when the bridge would accept the draft.
  *
- * Chatter takes a name it does not know exactly as the one agent whose name it begins (case-insensitive),
- * so the bridge counts such a name as that agent. Its roster is the target repo's agents that have not
- * departed; the directory, which is all the fake knows, lists every agent of every repo, departed ones
- * too. So the fake agrees with the bridge wherever the roster and the directory agree, and the cases
- * where they differ are listed in bridge-parity.test.ts.
+ * Chatter takes a name it does not know exactly as the one agent whose name it is the start of
+ * (case-insensitive), so the bridge counts such a name as that agent. Its roster is the target repo's
+ * agents that have not departed; the directory, which is all the fake knows, lists every agent of every
+ * repo, departed ones too. The fake therefore takes every agent in the directory to be on the roster, and
+ * agrees with the bridge wherever the two lists agree. Where they differ it cannot follow: a departed
+ * agent's name makes a handle look like an agent to the fake and not to the bridge, and a name that the
+ * directory offers but that is not on the roster, while being the start of a name that is, is refused by
+ * the bridge with 409 `"<name>" is not a live agent of this repo.` and accepted or refused as an agent by
+ * the fake. The cases are listed in bridge-parity.test.ts, which keeps that list exact.
  */
 export function refuseWrite(draft: SendDraft, me: Me, directory: Directory): Refusal | null {
   if (!draft.to) return recorded('post-missing-to');
@@ -228,6 +232,8 @@ export function refuseWrite(draft: SendDraft, me: Me, directory: Directory): Ref
   if (!toAgent && !directory.members.some((member) => member.handle === draft.to)) {
     return { status: STATUS.notFound, code: ERROR_CODES.unknownRecipient, message: `no agent or member named "${draft.to}"` };
   }
+  // The bridge asks next whether an agent's name is on the repo's live roster; here every agent of the
+  // directory is, so the question is never put (see above).
   if (toAgent && !admin && !me.can_address_agents) return recorded('post-dm-agent-not-allowed');
   if (!toAgent) {
     // A private message must never reach an agent or come back to its sender, so admins are refused too.

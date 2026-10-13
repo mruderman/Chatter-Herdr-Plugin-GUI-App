@@ -14,9 +14,11 @@
 //   stored   when it is accepted, the row as stored (to, kind, body, mentions, everyone) and, from the
 //            scripted bridge, who was mentioned and how a DM to an agent was delivered.
 // Not compared, because nothing here can produce it: the pushes and warnings that come from live Herdr
-// agents; rate limits; a name that is an agent in another repo only (the world has one repo); an exact
-// agent name that has departed (bridge/src/policy.js is about to decide that one from the repo's roster).
-// Where the roster and the directory differ the fake cannot follow, and UNMODELLED names those cases.
+// agents; rate limits; a name that is an agent in another repo only (the world has one repo; it would be
+// refused like the departed `rowan`, and for the same reason the fake cannot follow it).
+// The bridge decides what a name is the start of from the repo's live roster; the fake has only the
+// directory, which lists every agent of every repo, departed ones too. Where the two differ the fake
+// cannot follow, and UNMODELLED names those cases.
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -68,11 +70,12 @@ type Sender = (typeof SENDERS)[number];
 
 /**
  * The world, the same for the bridge and for the fakes (which are given the bridge's own directory):
- * agents seeded in alphabetical order, because the bridge lists the agents a name begins in the order of
- * its roster and the directory lists them sorted. `wren-old` has departed.
+ * agents seeded in alphabetical order, because the bridge lists the agents a name is the start of in the
+ * order of its roster and the directory lists them sorted. Two have departed: `wren-old`, which no live
+ * name starts with, and `rowan`, which is the start of the live `rowan-worker`.
  */
-const AGENTS = ['codex-worker', 'ivy-one', 'ivy-two', 'thomas-worker', 'wren-old'] as const;
-const DEPARTED = 'wren-old';
+const AGENTS = ['codex-worker', 'ivy-one', 'ivy-two', 'rowan', 'rowan-worker', 'thomas-worker', 'wren-old'] as const;
+const DEPARTED = ['rowan', 'wren-old'] as const;
 const MEMBERS = [
   { handle: 'mira', kind: 'human', can_address_agents: true },
   { handle: 'kieran', kind: 'computational', can_address_agents: false },
@@ -116,17 +119,22 @@ const CASES: readonly Case[] = [
   post('a mention nobody holds', 'hi @zzz'),
   post('a mention of @wren', 'hi @wren'),
   dm('a DM to cod, who is no member', 'cod'),
-  dm('a DM to thom, which begins thomas-worker', 'thom'),
-  dm('a DM to ivy, which begins two agents', 'ivy'),
+  dm('a DM to thom, the start of thomas-worker', 'thom'),
+  dm('a DM to ivy, the start of two agents', 'ivy'),
   dm('a DM to codex-worker, the exact name', 'codex-worker'),
   dm('a DM to a proper prefix of the sender\'s own handle', OWN_PREFIX),
   dm('a DM to a member', 'ana'),
   dm('a DM to oneself', THEMSELVES),
   dm('a DM to wren', 'wren'),
   dm('a DM to nobody', 'nobody'),
+  post('@rowan, a departed agent that is the start of a live one', 'hi @rowan'),
+  dm('a DM to rowan-worker, the live agent', 'rowan-worker'),
+  dm('a DM to wren-old, a departed agent that is the start of no live one', 'wren-old'),
+  dm('a DM to rowan, a departed agent that is the start of a live one', 'rowan'),
 ];
 
 const DEPARTED_AGENT = 'the directory lists a departed agent, which the bridge leaves out when it decides what a name is the start of; the fake has the directory and no roster';
+const NOT_ON_THE_ROSTER = 'the directory offers a name that is not on this repo\'s live roster (a departed agent, or an agent of another repo) and is the start of a name that is; the bridge refuses a DM to it with 409 "is not a live agent of this repo", checked before the permission, while the fake takes every agent of the directory for a live one';
 
 /**
  * The cases the fakes cannot answer as the bridge does, each with the reason. The test asserts this list
@@ -138,6 +146,9 @@ const UNMODELLED: Readonly<Record<string, string>> = {
   'a DM to wren as restricted': DEPARTED_AGENT,
   'a DM to wren as permitted': DEPARTED_AGENT,
   'a DM to wren as admin': DEPARTED_AGENT,
+  'a DM to rowan, a departed agent that is the start of a live one as restricted': NOT_ON_THE_ROSTER,
+  'a DM to rowan, a departed agent that is the start of a live one as permitted': NOT_ON_THE_ROSTER,
+  'a DM to rowan, a departed agent that is the start of a live one as admin': NOT_ON_THE_ROSTER,
 };
 
 interface Stored {
@@ -264,7 +275,7 @@ describe.skipIf(!HAVE_CHATTER)('the fakes against the real bridge and Chatter (n
     // A direct write to Chatter's scratch database, as bridge/test/hardening.test.js does for the same purpose.
     const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: new (file: string) => Database };
     const db = new DatabaseSync(path.join(env.repoInfo.dir, 'chatter.db'));
-    db.prepare('UPDATE agents SET departed_at = ? WHERE name = ?').run('2026-10-09 01:00:00', DEPARTED);
+    for (const name of DEPARTED) db.prepare('UPDATE agents SET departed_at = ? WHERE name = ?').run('2026-10-09 01:00:00', name);
     db.close();
     directory = directoryOf(await env.api('flan', 'GET', '/v1/directory'));
 
@@ -285,7 +296,7 @@ describe.skipIf(!HAVE_CHATTER)('the fakes against the real bridge and Chatter (n
     await env?.stop();
   });
 
-  it('serves the directory the fakes are given: every member and agent of the world, the departed agent included', () => {
+  it('serves the directory the fakes are given: every member and agent of the world, the departed agents included', () => {
     expect(directory.agents).toEqual([...AGENTS]);
     expect(directory.members.map((member) => member.handle).sort()).toEqual(['flan', ...MEMBERS.map((member) => member.handle)].sort());
   });
@@ -323,6 +334,17 @@ describe.skipIf(!HAVE_CHATTER)('the fakes against the real bridge and Chatter (n
 
   it('gives a reason for each unmodelled case', () => {
     for (const [key, why] of Object.entries(UNMODELLED)) expect(why.length, key).toBeGreaterThan(20);
+  });
+
+  // Without this the departed `rowan` could be live in the world (a seeding that did not take) and the
+  // listed rows would differ for some other reason, or not at all.
+  it('has the real bridge refuse a DM to a departed name that starts a live one as "not a live agent of this repo", checked before the permission', () => {
+    for (const sender of SENDERS) {
+      const row = rows.find((candidate) => candidate.key === `a DM to rowan, a departed agent that is the start of a live one as ${sender.role}`);
+      expect(row?.real.status, sender.role).toBe(409);
+      expect(row?.real.refusal?.code, sender.role).toBe('ambiguous_recipient');
+      expect(row?.real.refusal?.message, sender.role).toMatch(/^"rowan" is the start of the name of the Herdr agent rowan-worker, .* "rowan" is not a live agent of this repo\.$/);
+    }
   });
 
   it('refuses in the bridge\'s own words', () => {

@@ -123,9 +123,9 @@ const realDriver: MakeDriver = async (options = {}) => {
 
 const recordedPage = (who: string): readonly Message[] => parseMessagesPage(body(`messages-${who}`)).messages;
 // bridge/src/policy.js, checkWrite, worded for the recorded directory's one agent, "codex".
-const PREFIX_MENTION = (handle: string): string => `@${handle} begins the name of the Herdr agent codex, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`;
-const DM_BEGINS_AN_AGENT = (handle: string): string => `"${handle}" begins the name of the Herdr agent codex, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`;
-const DM_BEGINS_OWN_HANDLE = (handle: string): string => `"${handle}" begins your own handle, so Chatter would take it for you; nothing was sent. ${handle} can still message you, or an admin can rename one of you.`;
+const PREFIX_MENTION = (handle: string): string => `@${handle} is the start of the name of the Herdr agent codex, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`;
+const DM_START_OF_AN_AGENT = (handle: string): string => `"${handle}" is the start of the name of the Herdr agent codex, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`;
+const DM_START_OF_OWN_HANDLE = (handle: string): string => `"${handle}" is the start of your own handle, so Chatter would take it for you; nothing was sent. ${handle} can still message you, or an admin can rename one of you.`;
 const refusal = (name: string) => {
   const { code, message } = recordedError(name);
   return { code, message };
@@ -384,7 +384,7 @@ describe.each([
       expect(flan.now().messages.at(-1)).toMatchObject({ mentions: ['everyonex'], everyone: true });
     });
 
-    // The recorded directory has no member that an agent's name or a sender's handle begins with, so the
+    // The recorded directory has no member whose handle is the start of an agent's name or of a sender's handle, so the
     // admin panel adds one and the store takes it up with a refresh.
     const withMembers = async (d: Driver, ...handles: string[]): Promise<void> => {
       const { members, agents } = parseDirectory(body('directory'));
@@ -393,11 +393,11 @@ describe.each([
       await d.settle();
     };
 
-    it.each(['kieran', 'thom', 'flan'] as const)('refuses %s a direct message to a member whose handle begins the name of an agent, with the bridge\'s ambiguous_recipient, and writes nothing', async (as) => {
+    it.each(['kieran', 'thom', 'flan'] as const)('refuses %s a direct message to a member whose handle is the start of the name of an agent, with the bridge\'s ambiguous_recipient, and writes nothing', async (as) => {
       const d = await make({ as });
       await withMembers(d, 'cod');
       expect(await d.store.send({ to: 'cod', body: 'for cod, not for codex' })).toBe(false);
-      expect(d.now().sendError).toEqual({ code: 'ambiguous_recipient', message: DM_BEGINS_AN_AGENT('cod') });
+      expect(d.now().sendError).toEqual({ code: 'ambiguous_recipient', message: DM_START_OF_AN_AGENT('cod') });
       expect(d.written()).toBe(0);
     });
 
@@ -409,7 +409,7 @@ describe.each([
       const d = await make({ as });
       await withMembers(d, prefix);
       expect(await d.store.send({ to: prefix, body: 'hello?' })).toBe(false);
-      expect(d.now().sendError).toEqual({ code: 'ambiguous_recipient', message: DM_BEGINS_OWN_HANDLE(prefix) });
+      expect(d.now().sendError).toEqual({ code: 'ambiguous_recipient', message: DM_START_OF_OWN_HANDLE(prefix) });
       expect(d.written()).toBe(0);
     });
 
