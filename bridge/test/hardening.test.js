@@ -674,6 +674,24 @@ describe('T13c item 2: a read decides with the member as they are once its data 
     } finally { await x.stop(); }
   });
 
+  test('repo list: an admin revoked while the repos are listed gets 401 and no repo_root', async () => {
+    const x = await makeEnv();
+    try {
+      x.addMember('ada', { role: 'admin' });
+      const pause = pauseNext(x.host, 'repos');
+      const reading = x.api('ada', 'GET', '/v1/repos');
+      await pause.entered;
+      assert.equal((await x.api('flan', 'DELETE', '/v1/members/ada')).status, 200);
+      pause.release();
+      const r = await reading;
+      // A revoked member keeps the role they had, so a record that is read without its status would still
+      // show them the paths.
+      assert.equal(r.status, 401);
+      assert.equal(r.body.error.code, ERR.badToken);
+      assert.equal(JSON.stringify(r.body).includes(x.repo), false, 'no repo path in the answer');
+    } finally { await x.stop(); }
+  });
+
   test('directory: a member revoked while the agent names are read gets 401', async () => {
     const x = await makeEnv();
     try {
