@@ -1,21 +1,35 @@
-# systemd user unit for the Chatter bridge.
+# systemd user unit for the Chatter bridge. The runbook is docs/runbooks/deploy.md.
 #   cp deploy/chatter-bridge.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now chatter-bridge
-# Adjust the three paths marked CHANGE. Hardening lines are conservative and untested on the real host.
+# Adjust the paths marked CHANGE. Hardening lines are conservative and untested on the real host.
 [Unit]
 Description=Chatter bridge (REST and SSE for the Chatter Herdr plugin)
 After=network-online.target
 
 [Service]
 Type=simple
-# CHANGE: where this repo lives
+# CHANGE: the checkout the bridge's code runs from. A release built by deploy/build-client.sh holds only the web
+# client, so moving the symlink below does not change the bridge's own code: check out the matching commit here too.
 WorkingDirectory=%h/Chatter-Herdr-Plugin-GUI-App
 # CHANGE: directory holding the `chatter` command and `herdr`
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-# CHANGE if the plugin's state is not in Chatter's default location (see `chatter data`)
+# CHANGE if the plugin's state is not in Chatter's default location (see `chatter data`); the production value
+# is in deploy/chatter-bridge.env.example
 #Environment=CHATTER_STATE_DIR=%h/.local/state/herdr/plugins/chatter
 Environment=CHATTER_CMD=chatter
 Environment=CHATTER_BRIDGE_TRUST_TAILSCALE=1
+# The built web client, through the symlink deploy/build-client.sh moves (RELEASES_DIR=%h/chatter-bridge/releases).
+# CHANGE if the releases live elsewhere. The bridge resolves this path once, at start: after the symlink moves,
+# run `systemctl --user restart chatter-bridge` or the old release keeps being served.
+Environment=CHATTER_BRIDGE_STATIC_DIR=%h/chatter-bridge/releases/current/dist
+# Optional overrides, one KEY=value per line; a variable set there wins over the Environment= lines above, and the
+# leading "-" makes a missing file fine. Never put a token in it. Every variable is described in
+# deploy/chatter-bridge.env.example.
+EnvironmentFile=-%h/.config/chatter-bridge/env
+# node:sqlite needs no --experimental-sqlite flag from Node 22.13 (production runs 22.22.1). --no-warnings only
+# hides its "experimental" notice; keep it.
+# CHANGE if `/usr/bin/node --version` is older than 22.13 or node lives elsewhere: give the full path of a node
+# that is new enough (the PATH line above does not decide which node ExecStart runs).
 ExecStart=/usr/bin/node --no-warnings bridge/bin/chatter-bridge.js serve --host 127.0.0.1 --port 8791
 Restart=on-failure
 RestartSec=3

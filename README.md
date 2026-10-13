@@ -31,11 +31,15 @@ node --no-warnings bridge/bin/chatter-bridge.js init --login you@example.com
 # 2. Add a computational member; the token is printed once
 node --no-warnings bridge/bin/chatter-bridge.js member add thom --kind computational --name "Thom"
 
-# 3. Run as a service (edit the paths first)
+# 3. Build the web client and place a release (Node 22.13 or later). The unit serves it through
+#    ~/chatter-bridge/releases/current/dist and `serve` refuses to start without one.
+RELEASES_DIR=~/chatter-bridge/releases deploy/build-client.sh
+
+# 4. Run as a service (edit the paths first)
 cp deploy/chatter-bridge.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now chatter-bridge
 
-# 4. Publish on the tailnet. Use a port Funnel cannot use (Funnel allows only 443, 8443 and 10000).
+# 5. Publish on the tailnet. Use a port Funnel cannot use (Funnel allows only 443, 8443 and 10000).
 tailscale serve --bg --https=8446 http://127.0.0.1:8791
 tailscale serve status
 ```
@@ -56,7 +60,7 @@ The bridge refuses to listen on anything but loopback. Check that port 8791 is f
 | `CHATTER_BRIDGE_PORT` | `8791` | Port `serve` binds; `--port` wins. |
 | `CHATTER_BRIDGE_TRUST_TAILSCALE` | unset | `1` trusts Tailscale identity headers, each verified with `tailscale whois`. |
 | `CHATTER_BRIDGE_ORIGINS` | none | Comma-separated origins allowed to call the API cross-origin. |
-| `CHATTER_BRIDGE_STATIC_DIR` | unset: no web client | Serves the built web client (`client/dist`) at `/`. It must contain `index.html`, or `serve` refuses to start. `/healthz` and everything under `/v1` are unchanged. |
+| `CHATTER_BRIDGE_STATIC_DIR` | unset: no web client; the unit sets `~/chatter-bridge/releases/current/dist` | Serves the built web client (`client/dist`) at `/`. It must contain `index.html`, or `serve` refuses to start. Resolved once, at start: after a new release is placed, restart the service. `/healthz` and everything under `/v1` are unchanged. |
 
 ## Members and permissions
 
