@@ -1,4 +1,4 @@
-**Updated:** 2026-10-13 04:45 PDT · local `main` (see `git log -1`); **not pushed** (see "Git" below) · M3 (web client core) is done and merged into local `main`; G2 is closed; nothing is running.
+**Updated:** 2026-10-13 06:10 PDT · local `main` (see `git log -1`); **not pushed** (see "Git" below) · M3 (web client core) is done and merged into local `main`; G2 is closed; nothing is running.
 
 ## Where we are
 - **Final check on the M3 tree, run by me (`docs/review/final-check.py`):** typecheck clean; client unit tests 1463 of 1463 (53 files); root `npm test` with real Chatter 215 pass, 0 fail, 0 skipped; build and `check:dist` OK; E2E 29 passed (the one ✘ is the `test.fail()` canary); the three gate mutations each turned their named spec red (break `canSee`: `gate-dm-privacy.spec.ts`; drop the `@everyone` rule: `gate-everyone.spec.ts`; drop the CSP header: `smoke.spec.ts`). Node 18.20.8 ran the member client against a real bridge (`whoami`, `post`, `read`, a live `watch`, a bad token).
@@ -10,20 +10,28 @@
 Nothing.
 
 ## Decisions by Flan (2026-10-13, in chat)
-- Direction: consolidate to an MVP (M3 closed, then deploy-and-verify with a real agent), M4, search and the PWA only as outlines until deploy-and-verify passes. The steering text: fix only a reproduced break of a `CLAUDE.md` hard boundary, the rest to Debt; another review round only after a reproduced hard-boundary finding, and Flan is told first; no fork or separate PWA repo; no Electron, Tauri or installer work; no dependency beyond the vetted set; no M4 before its plan is approved.
-- D18: search is client-side over the archive (SPEC section 2). D19: the archive keeps `#chat` only by default, DMs only on opt-in (as for export, D1).
-- Test hosts: any Herdr on any tailnet machine except `baremetalcyansociety` (never touch that one). This laptop `pop-os-laptop` has Herdr 0.9.1 and tmux.
-- The review tooling is committed under `docs/review/`.
+- Direction: consolidate to an MVP (M3 closed, then deploy-and-verify with real agents), M4, search and the PWA only as outlines until deploy-and-verify passes. Fix only a reproduced break of a `CLAUDE.md` hard boundary, the rest to Debt; another review round only after a reproduced hard-boundary finding, and Flan is told first; no fork or separate PWA repo; no Electron, Tauri or installer work; no dependency beyond the vetted set; no M4 before its plan is approved.
+- **Approved: `docs/plans/deploy-verify.md`.** Sequencing and DMs-opt-in for the archive (D19) agreed. D18 search is client-side. The review tooling is committed under `docs/review/`. Git events are left to me; keep branches and worktrees tidy.
+- **D9 closed:** MIT confirmed (the `LICENSE` holder reads "Cyan Society" and was not corrected).
+- **D11 closed:** production is `baremetalcyansociety`, account `letta`, Herdr `default` session, one Herdr server. Test hosts: any other tailnet machine; development is on this laptop (Herdr 0.9.1; production has 0.9.3, same protocol 22).
+- **D20 browsers:** Edge, Chrome, Firefox or Brave, any one; tested in Chromium.
+- **Read-only SSH to production as `letta`** is authorised for checks only (list in `docs/plans/deploy-verify.md`). Done once, below.
+- Prime Agent loads skills by progressive disclosure (scan, metadata in the system prompt, the model reads `SKILL.md` through `ipython`): recorded in V4 of the plan, told by Flan, not verified by me.
+- V4 agents: ideally a test Letta agent and a test Prime Agent (Flan provides), plus Claude Code and Codex CLI.
+
+## Production, verified read-only over SSH on 2026-10-13 (nothing was changed there)
+Chatter is upstream 0.19.0 at `0edc18f`, the commit the tests ran against, with local patches in three `dist` files (delivery truncation notice; terminal submission no longer sets `read_at`; the board's alternate screen) and absolute paths in `herdr-plugin.toml`. I rebuilt its exact files on the laptop (all four hashes equal production's) and **the 215 bridge tests pass against that copy.** `chatter` is on `letta`'s PATH, Node is 22.22.1 (no sqlite flag needed), `tailscale` is installed, state is `/home/letta/.local/state/herdr/plugins/chatter` (six repos, the largest with 1554 messages), no bridge is installed yet, and the user units `collie`, `house-board` and `ws-execd` exist. The bridge will run as `letta`, the same account as the agents; see the risk below. Details: `docs/SPEC.md` sections 2 and 3, `docs/plans/deploy-verify.md`.
 
 ## Waiting for Flan
-1. **Approve `docs/plans/deploy-verify.md`** (nothing dispatched before). It starts with V0, proving that a throwaway Herdr session shares nothing with another; if it cannot, it stops and asks.
-2. **Facts still open:** D9 (is MIT confirmed?); how Prime Agent loads skills; which browsers members use; which real agent takes part in V4; for the production runbook only, D11 (which Herdr server and Chatter state directory the production bridge serves).
-3. **The push** (above).
+1. **Test agents for V4:** a test Letta agent and a test Prime Agent (Claude Code and Codex CLI I can start with on the laptop).
+2. **Still open:** whether "Prime Agent" (Grace's harness) is Qredence's fleet-prime-agent, and where Grace runs (SPEC Q1 says outside Herdr; a process on production shows a Herdr worktree path for `agents-grace`).
+3. **The push.** `git push origin main` is blocked by the `toru-claude-agents` push guard hook; I did not work around it. Local `main` is about 140 commits ahead of `origin/main` (the repo is public; the range was scanned for tokens and internal identifiers: none found). Run the push yourself or remove the guard.
+4. **A risk to accept knowingly (proposed R-number):** on production the bridge and the agents share the account `letta`, because the bridge must write Chatter's state through the `chatter` CLI and reach Herdr's socket. The bridge's policy (DM privacy, `@everyone`, revocation) governs the HTTP path only; any process running as `letta` can read every Chatter database and edit the bridge's registry. Recommended default: accept for the MVP, keep it written in SPEC section 10, and do not offer the bridge as protection against an agent that has a shell on that host.
 
-## Next (after the approval)
-1. `deploy-verify` branch: V0 isolation, V1 build script, V2 unit and runbook, V3 real-Herdr smoke on this laptop, V4 a real agent run (needs Flan), V5 exploratory GUI pass, V6 close. Each task as before: an executor in a worktree, tests first, my verification and mutations, one commit, then merge.
-2. Then the full plans for M4 (archive, export, search) and the PWA from the outlines (`docs/plans/m4-archive.md`, `docs/plans/m5-pwa.md`), approved before dispatch.
-3. After 2026-10-14: re-run `docs/dependencies.md` for the `source-map-js` advisory (fix 1.2.2 is eligible then: add an `overrides` pin and regenerate the lockfile) and for the lockfile root's Node version.
+## Next
+1. Start `deploy-verify` (branch from `main`): V0 isolate a throwaway Herdr session on the laptop, V1 build script, V2 unit and runbook, V3 real-Herdr smoke with the production-identical Chatter copy, V4 real agents, V5 exploratory GUI pass, V6 close. Production install is V7 and needs a separate go-ahead and a window.
+2. Then the full plans for M4 (archive, export, search) and the PWA from the outlines, approved before dispatch.
+3. After 2026-10-14: re-run `docs/dependencies.md` for the `source-map-js` advisory (fix 1.2.2 becomes eligible: add an `overrides` pin and regenerate the lockfile) and for the lockfile root's Node version.
 
 ## Unverified (not shown by any test or run of mine)
 Screen readers (Orca); Firefox and Safari; a real OS notification; **real Herdr delivery** (a message into an agent pane, `@everyone` fan-out, prefix resolution against live agents the bridge cannot see); **a real Letta or Prime Agent run** of `clients/chatter-member.mjs` and the skill, and where the skill says to keep a token and how to rotate it; Wayland scaling and forced-colors contrast; T6's and T9's real-browser checks and T7's throwaway browser run (executors' reports, not re-run); the systemd unit's hardening on a real host.

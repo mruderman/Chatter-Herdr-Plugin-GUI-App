@@ -61,11 +61,12 @@ Contract tests run the bridge against a real Chatter CLI in a scratch repo (no H
 
 ## Open items that need Flan (do not assume)
 
-- D11: which Herdr server and Chatter state directory the production bridge serves (the host may run two). Flan, 2026-10-13: any Herdr installed on any tailnet machine except `baremetalcyansociety` is a test installation and may be used for testing; never touch `baremetalcyansociety`'s Herdr. This laptop (`pop-os-laptop`) has Herdr and tmux.
-- D9: MIT is assumed; not yet confirmed (asked 2026-10-13, no answer yet).
-- Whether "Prime Agent" (Grace's harness) is Qredence's fleet-prime-agent, and how it loads skills (asked, no answer yet). Flan: Letta and Prime Agent harnesses manage their own context and can edit their own harness.
+- D11 (closed, SPEC section 2): production is `baremetalcyansociety`, account `letta`, Herdr `default` session, one Herdr server, state `/home/letta/.local/state/herdr/plugins/chatter`; its Chatter is upstream 0.19.0 `0edc18f` with local `dist` patches (SPEC section 3), and the 215 bridge tests pass against a byte-identical copy. Testing: any Herdr on any tailnet machine except `baremetalcyansociety`; never touch that Herdr. This laptop (`pop-os-laptop`, Herdr 0.9.1) is the development host. Read-only SSH to production as `letta` is allowed for checks only (no Herdr start, stop, reload or update; no `chatter post`, `send` or `@everyone`; no tests there; nothing that writes under `/home/letta`; never touch the agents' panes): Flan, 2026-10-13.
+- D9 (closed): MIT, confirmed by Flan 2026-10-13; the `LICENSE` holder reads "Cyan Society".
+- Prime Agent loads skills by progressive disclosure (told by Flan from its docs, not verified by me; details in `docs/plans/deploy-verify.md` V4): it scans `~/.prime/agent/skills/`, `~/.agents/skills/` and the project's `.prime/agent/skills/` and `.agents/skills/`, puts only name and description in the system prompt, and the model reads the full `SKILL.md` through its `ipython` tool when a task matches. Still open: whether "Prime Agent" (Grace's harness) is Qredence's fleet-prime-agent, and where Grace runs (SPEC Q1 says outside Herdr; a process on production shows a Herdr worktree path for `agents-grace`). Flan: Letta and Prime Agent harnesses manage their own context and can edit their own harness.
 - Delivery of messages into live agent panes is untested: it needs a real Herdr (the deploy-and-verify slice, on a test host with a throwaway state directory).
-- Which browsers members use (asked, no answer yet).
+- Browsers (D20, closed): Edge, Chrome, Firefox or Brave, any one; tested in Chromium.
+- Test agents for the real-agent run (V4): ideally a test Letta agent and a test Prime Agent (Flan to provide), and Claude Code and Codex CLI as standard agents (available on the laptop).
 
 ## First message to send in a new session
 

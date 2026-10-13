@@ -52,6 +52,9 @@ Not added, as the plan says: a router, a state library, ESLint, `idb` (M4), `@te
 - **New majors.** TypeScript 7.0.2, Vite 8.3.1, Vitest 5.0.1 and jsdom 29.1.1 are recent majors. Everything in T0 ran on them. I did not test older lines (Vite 7, Vitest 4, TypeScript 6), so they are untried fallbacks if a later task hits a toolchain bug.
 - **TypeScript 7.** `tsconfig.json` sets `types` explicitly and avoids options TypeScript 7 removed (`baseUrl`, `node10` resolution, `esModuleInterop: false` and others).
 
+## Licences (D9, confirmed 2026-10-13)
+The project is MIT (`LICENSE`, "Copyright (c) 2026 Cyan Society"; `package.json` files and the README say MIT). Every package that ends up in the shipped bundle is MIT (`preact`). The non-MIT packages are dev-only and are not shipped: `axe-core` and `@axe-core/playwright` (MPL-2.0) and `@playwright/test` (Apache-2.0). Check this again when a dependency is added: `idb`'s licence is part of vetting it in M4.
+
 ## Re-checking this record
 ```sh
 npm --prefix client ci
