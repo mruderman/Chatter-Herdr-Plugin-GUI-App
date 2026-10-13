@@ -86,7 +86,9 @@ export interface Message {
 
 /**
  * GET /v1/repos/{key}/messages. Oldest first, at most 500. `max_id` is the largest id in the
- * whole table, visible to this member or not, which makes it a safe cursor to resume from.
+ * whole table, visible to this member or not. It is read in a separate statement from the messages, so
+ * a row written between the two can be counted in `max_id` and missing from `messages`: resume a stream
+ * after the highest message id returned, never after `max_id`.
  */
 export interface MessagesPage {
   readonly repo: string;

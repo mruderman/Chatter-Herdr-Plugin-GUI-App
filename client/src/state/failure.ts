@@ -1,6 +1,7 @@
 // How the store reads a failed request, and when it asks again. Every request it makes on its own
 // (the session check, the repo list, the directory, a repo's newest page) goes through keepTrying;
-// requests a member starts (send, older messages, read pointer) fail once and say so.
+// requests a member starts (send, older messages) fail once and say so. A read acknowledgement is the
+// exception: it says nothing, and the store retries one that failed in transit (store.ts, retryRead).
 import { ApiError, ERROR_CODES, NetworkError, ProtocolError } from '../api/errors';
 import type { ErrorInfo } from './types';
 
