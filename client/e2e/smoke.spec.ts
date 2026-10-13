@@ -7,6 +7,7 @@ import { axeScan } from './harness/axe';
 import { expect, test } from './harness/fixtures';
 import { tokenLeaks } from './harness/guard';
 import { startProxy } from './harness/proxy';
+import { UI } from './harness/ui';
 import { D15_CSP, worldTokens } from './harness/world';
 
 const ASSETS = '/assets/';
@@ -111,8 +112,18 @@ test.describe('harness canaries: each guard sees what it exists to catch', () =>
     expect(await tokenLeaks(page, guard, [])).toEqual(['a form control\'s value outside the "New token" dialog']);
     await page.evaluate(() => document.getElementById('e2e-field')?.remove());
 
-    // The exemption is for the sign-in field alone, found by its label. A password input anywhere else that
-    // holds a token is a leak: masking a credential is no licence to keep it.
+    // The exemption is for the Sign in view's own field alone. The page here is the real Sign in view, so the
+    // real field is filled and exempt; a password input anywhere else that holds a token is a leak (masking a
+    // credential is no licence to keep it), and so is any second input in the view, whatever its type or label.
+    await expect(page.getByRole('heading', { level: 1, name: UI.signIn.heading })).toBeVisible();
+    await page.getByLabel(UI.signIn.token).fill(fake);
+    await page.evaluate((t) => {
+      const area = document.createElement('textarea');
+      document.querySelector('[role="dialog"]')?.append(area);
+      area.value = t;
+    }, fake);
+    expect(await tokenLeaks(page, guard, []), 'the real sign-in field and a New token dialog may hold one').toEqual([]);
+
     await page.evaluate((t) => {
       const extra = document.createElement('input');
       extra.type = 'password';
@@ -120,38 +131,69 @@ test.describe('harness canaries: each guard sees what it exists to catch', () =>
       document.body.append(extra);
       extra.value = t;
     }, fake);
-    expect(await tokenLeaks(page, guard, []), 'a password input that is not the sign-in field').toEqual(['a form control\'s value outside the "New token" dialog']);
+    expect(await tokenLeaks(page, guard, []), 'a password input outside the Sign in view').toEqual(['a form control\'s value outside the "New token" dialog']);
     await page.evaluate(() => document.getElementById('e2e-extra')?.remove());
 
-    await page.evaluate((t) => {
-      const label = document.createElement('label');
-      label.id = 'e2e-signin-label';
-      label.htmlFor = 'e2e-signin';
-      label.textContent = 'Access token';
-      const signIn = document.createElement('input');
-      signIn.type = 'password';
-      signIn.id = 'e2e-signin';
-      document.body.append(label, signIn);
-      signIn.value = t;
-      const area = document.createElement('textarea');
-      document.querySelector('[role="dialog"]')?.append(area);
-      area.value = t;
-    }, fake);
-    expect(await tokenLeaks(page, guard, []), 'the sign-in field and a New token dialog may hold one').toEqual([]);
+    // A copy of the field with the same label, beside the real one, is a leak even when it comes first and the
+    // real field is empty: the view then holds two candidates, and neither is exempt.
+    await page.getByLabel(UI.signIn.token).fill('');
+    for (const type of ['password', 'text']) {
+      await page.evaluate(([t, kind]) => {
+        const root = Array.from(document.querySelectorAll('h1')).find((h) => h.textContent?.trim() === 'Sign in')?.parentElement;
+        const label = document.createElement('label');
+        label.id = 'e2e-copy-label';
+        label.htmlFor = 'e2e-copy';
+        label.textContent = 'Access token';
+        const copy = document.createElement('input');
+        copy.type = kind ?? 'text';
+        copy.id = 'e2e-copy';
+        root?.prepend(label, copy);
+        copy.value = t ?? '';
+      }, [fake, type]);
+      expect(await tokenLeaks(page, guard, []), `a ${type} input labelled like the sign-in field, inside the Sign in view`).toEqual(['a form control\'s value outside the "New token" dialog']);
+      await page.evaluate(() => {
+        document.getElementById('e2e-copy')?.remove();
+        document.getElementById('e2e-copy-label')?.remove();
+      });
+    }
+    await page.getByLabel(UI.signIn.token).fill(fake);
+    expect(await tokenLeaks(page, guard, []), 'back to the real field alone').toEqual([]);
 
-    // Only while the Sign in view is showing. Once it is gone (the member is signed in) a field with the same
-    // label holding the token is a leak, however it got there.
+    // Only while the Sign in view is showing. Once it is gone (the member is signed in) the field holding the
+    // token is a leak, however it got there.
     await page.evaluate(() => {
       const heading = document.querySelector('h1');
       if (heading) heading.textContent = 'Chat';
     });
-    expect(await tokenLeaks(page, guard, []), 'a labelled password field once the sign-in view is gone').toEqual(['a form control\'s value outside the "New token" dialog']);
+    expect(await tokenLeaks(page, guard, []), 'the field once the sign-in view is gone').toEqual(['a form control\'s value outside the "New token" dialog']);
     await page.evaluate(() => {
       const heading = document.querySelector('h1');
       if (heading) heading.textContent = 'Sign in';
-      document.getElementById('e2e-signin')?.remove();
-      document.getElementById('e2e-signin-label')?.remove();
     });
+    await page.getByLabel(UI.signIn.token).fill('');
+
+    // With the real field gone, no other input is the sign-in field: not a password input beside the view, and
+    // not an input of another type labelled the same inside it.
+    await page.evaluate(() => document.querySelector('input[type="password"]')?.remove());
+    for (const where of ['beside the Sign in view', 'inside the Sign in view as a text input']) {
+      await page.evaluate(([t, place]) => {
+        const label = document.createElement('label');
+        label.id = 'e2e-late-label';
+        label.htmlFor = 'e2e-late';
+        label.textContent = 'Access token';
+        const late = document.createElement('input');
+        late.id = 'e2e-late';
+        late.type = place?.startsWith('inside') ? 'text' : 'password';
+        const root = Array.from(document.querySelectorAll('h1')).find((h) => h.textContent?.trim() === 'Sign in')?.parentElement;
+        (place?.startsWith('inside') ? root : document.body)?.append(label, late);
+        late.value = t ?? '';
+      }, [fake, where]);
+      expect(await tokenLeaks(page, guard, []), `a labelled input ${where} when the real field is gone`).toEqual(['a form control\'s value outside the "New token" dialog']);
+      await page.evaluate(() => {
+        document.getElementById('e2e-late')?.remove();
+        document.getElementById('e2e-late-label')?.remove();
+      });
+    }
 
     await page.evaluate((t) => sessionStorage.setItem('e2e', t), fake);
     expect(await tokenLeaks(page, guard, [])).toEqual(['localStorage or sessionStorage']);

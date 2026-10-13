@@ -172,15 +172,16 @@ async function dumpPage(page: Page): Promise<PageDump> {
 
     // A form control's live value is not HTML, so the walk never sees it. The sign-in field holds the token
     // until sign-in succeeds (ui-contract section 1) and a "New token" dialog holds a new one: those two are
-    // exempt. The sign-in field is found by its label, not by its type, and only while the Sign in view is on
-    // the page: once the member is signed in nothing may hold the token, however it is labelled, so a second
-    // password input (or a copy of the field) left behind after sign-in is still a leak.
-    const signInShowing = Array.from(document.querySelectorAll('h1')).some((heading) => (heading.textContent ?? '').trim() === signInHeading);
-    const isSignInField = (el: Element): boolean =>
-      signInShowing
-      && el instanceof HTMLInputElement
-      && el.type === 'password'
-      && Array.from(el.labels ?? []).some((label) => (label.textContent ?? '').trim() === signInLabel);
+    // exempt. The sign-in field is the one password input labelled for the token inside the Sign in view's own
+    // container, so it exists only while that view is on the page, and a second input anywhere (a copy of the
+    // field, an input of another type with the same label) is a leak. If the view holds more than one such
+    // input, none is exempt: the page is not showing the one field it is meant to.
+    const signInRoot = Array.from(document.querySelectorAll('h1'))
+      .find((heading) => (heading.textContent ?? '').trim() === signInHeading)?.parentElement ?? null;
+    const signInFields = signInRoot === null ? [] : Array.from(signInRoot.querySelectorAll('input')).filter((el) =>
+      el.type === 'password' && Array.from(el.labels ?? []).some((label) => (label.textContent ?? '').trim() === signInLabel));
+    const signInField: Element | null = signInFields.length === 1 ? (signInFields[0] ?? null) : null;
+    const isSignInField = (el: Element): boolean => el === signInField;
     const values: string[] = [];
     for (const el of Array.from(document.querySelectorAll('input, textarea, select'))) {
       if ([...exempt].some((d) => d.contains(el))) continue;
