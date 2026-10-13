@@ -18,6 +18,38 @@ test('mentionsOf follows Chatter grammar and finds @everyone case-insensitively'
   assert.deepEqual(mentionsOf('@everyone-ish'), { handles: ['everyone-ish'], everyone: false });
 });
 
+// T13b. Chatter's postToChat reads mentions case-sensitively, so a capital letter ends its token: "@codX" is
+// "@cod" to Chatter, which then reaches the agent "codex-worker" by prefix.
+test('mentionsOf also reads each mention as Chatter does, where a capital letter ends the token', () => {
+  assert.deepEqual(mentionsOf('@everyoneX'), { handles: ['everyonex'], everyone: true });
+  assert.deepEqual(mentionsOf('@codX'), { handles: ['cod', 'codx'], everyone: false });
+  assert.deepEqual(mentionsOf('hi @codex-workerZ'), { handles: ['codex-worker', 'codex-workerz'], everyone: false });
+  assert.deepEqual(mentionsOf('@gracE and @codX'), { handles: ['grac', 'cod', 'grace', 'codx'], everyone: false });
+});
+
+test('mentionsOf keeps reading each mention whole and case-insensitively', () => {
+  for (const body of ['@Everyone', '@EVERYONE', 'a@everyone']) {
+    assert.deepEqual(mentionsOf(body), { handles: [], everyone: true }, body);
+  }
+  // Chatter reads nothing after "@C"; the whole-token reading still sees the agent's name.
+  assert.deepEqual(mentionsOf('hey @Codex-worker'), { handles: ['codex-worker'], everyone: false });
+  assert.deepEqual(mentionsOf('plain @codex @kai'), { handles: ['codex', 'kai'], everyone: false });
+  assert.deepEqual(mentionsOf('nothing to see here'), { handles: [], everyone: false });
+  // Neither reading takes a letter outside ASCII, and both run to the end of the body.
+  assert.deepEqual(mentionsOf('hey @codéx'), { handles: ['cod'], everyone: false });
+  assert.deepEqual(mentionsOf('ends with @cod'), { handles: ['cod'], everyone: false });
+});
+
+test('policy: a mention is checked as Chatter reads it as well as whole', () => {
+  const p = { agentNames: new Set(['codex-worker']), repoAgents: ['codex-worker'], memberHandles: new Set(['flan', 'thom', 'kai']) };
+  const off = member({ can_address_agents: false });
+  for (const body of ['hey @codX', 'hey @codex-workerZ']) {
+    refused(() => checkWrite({ member: off, to: '#chat', body, ...p }), 'agents_not_allowed');
+  }
+  refused(() => checkWrite({ member: member(), to: '#chat', body: '@everyoneX hi', ...p }), 'everyone_admin_only');
+  assert.equal(checkWrite({ member: admin, to: '#chat', body: '@everyoneX hi', ...p }).everyone, true);
+});
+
 test('chatterTime turns Chatter UTC strings into ISO', () => {
   assert.equal(chatterTime('2026-10-09 06:00:19'), '2026-10-09T06:00:19Z');
 });
