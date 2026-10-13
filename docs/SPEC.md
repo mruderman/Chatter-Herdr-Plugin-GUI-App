@@ -74,11 +74,11 @@ All routes return JSON; errors are `{"error":{"code","message"}}`. `GET /healthz
 | `GET /v1/directory` | `{members:[{handle, display_name, kind}], agents:[names]}` |
 | `GET /v1/repos` | `{repos:[{key, label, repo_root (admin only), orphan, messages, last_activity, epoch, last_read_id}]}` |
 | `GET /v1/repos/{key}/messages?after_id&before_id&limit` | `{repo, epoch, messages, has_more, max_id}`; at most 500; oldest first |
-| `POST /v1/repos/{key}/messages` | body `{to:"#chat"\|handle, body}` returns 201 `{id, pushed, warnings, mentioned_members, delivery}` |
-| `GET /v1/repos/{key}/stream` | server-sent events: `hello {epoch, max_id}`, `message` (id = message id), `bye {reason}`; resume with `Last-Event-ID` or `?after_id` |
-| `GET /v1/repos/{key}/board` | `{agents, agents_error, tasks, notes, questions, handoffs}`; for a non-admin each agent row keeps only the non-path keys (no `repo_root`, no `cwd`), as `/v1/repos` hides `repo_root` from non-admins (F15) |
+| `POST /v1/repos/{key}/messages` | body `{to:"#chat"\|handle, body}` returns 201 `{id, pushed, warnings, mentioned_members, delivery}`; refusals write nothing: 400, 401 (the sender was revoked while the send waited), 403 `everyone_admin_only` and `agents_not_allowed`, 409 `ambiguous_recipient`, 429 |
+| `GET /v1/repos/{key}/stream` | server-sent events: `hello {epoch, max_id}`, `message` (id = message id), `bye {reason}` (`epoch`, `error`, `revoked`, `token_rotated`); resume with `Last-Event-ID` or `?after_id` |
+| `GET /v1/repos/{key}/board` | `{agents, agents_error, tasks, notes, questions, handoffs}`; for a non-admin each agent row keeps only the non-path keys (no `repo_root`, no `cwd`), as `/v1/repos` hides `repo_root` from non-admins (F15), and `agents_error` is the fixed text "Chatter could not list agents", because the detail can name host paths |
 | `POST /v1/repos/{key}/read` | body `{up_to_id}`; pointer only moves forward |
-| `/v1/members` (admin) | `GET` list; `POST` add (computational members get a token); `PATCH /{h}`; `DELETE /{h}` revoke; `POST /{h}/token` rotate |
+| `/v1/members` (admin) | `GET` list; `POST` add (computational members get a token); `PATCH /{h}` (validated as add is: 400 `bad_kind`, `bad_role`, `bad_request` for an empty patch or an empty display name, 409 `login_taken`, 409 `last_admin`; an empty login means none); `DELETE /{h}` revoke; `POST /{h}/token` rotate. Each change and its audit entry are one transaction, so a 500 from these routes means that nothing changed (the CLI's own commands are not yet atomic with their audit entry) |
 | `GET /v1/audit` (admin) | pushes into agents, `@everyone`, registry changes |
 
 Message shape: `{id, from, to, body, kind, ref_id, created_at (ISO 8601, UTC, "Z"), mentions:[handles], everyone}`.
@@ -86,14 +86,15 @@ Message shape: `{id, from, to, body, kind, ref_id, created_at (ISO 8601, UTC, "Z
 Sync rules:
 - Ids only rise. A member's view has gaps (other people's DMs are invisible), so clients track `after_id` cursors and never infer a purge from a gap.
 - `epoch` changes if a repo's database is deleted and recreated; the stream then sends `bye {reason:"epoch"}`.
-- Streams poll the database every 500 ms; revocation closes streams at once through the API and within about 2 s from the CLI.
+- Streams poll the database every 500 ms. Before each batch is delivered, and every fourth tick for an idle stream, the watcher reads the registry again: a stream ends with `revoked` when its member is no longer active and with `token_rotated` when the bearer token it was opened with is no longer one of the member's live tokens (a tailnet-identity stream has no token), and every stream sees its member's current role, so a demoted admin stops receiving other members' DMs. This holds whichever process changed the registry: through the API the streams close at once, from the CLI within about 2 s.
 
 ## 6. Members, authentication, policy
 
 - Registry fields: handle (`^[a-z0-9][a-z0-9_-]{0,31}$`, not `everyone`), display name, kind (human or computational), role (admin or member), `can_address_agents`, status, Tailscale login, timestamps.
 - A handle may not match any Herdr agent name, live or departed.
 - Humans: Tailscale identity header, trusted only from loopback and only when `tailscale whois` on `X-Forwarded-For` returns the same login. Computational members: bearer token (`cb_` plus 256 random bits), stored as SHA-256, shown once, rotatable, revocable.
-- Policy, checked before any CLI call: members cannot use `@everyone` (rejected with `everyone_admin_only`, nothing written); mentioning or DMing a Herdr agent needs `can_address_agents`; DM recipients must be an active member or a known agent; message at most 8,000 characters, no NUL; 20 writes per minute per member.
+- Policy, checked before any CLI call and again inside the repo lock, from the registry as it stands then (a send that waited while its sender was revoked answers 401, and a role or `can_address_agents` change made meanwhile applies): members cannot use `@everyone` (rejected with `everyone_admin_only`, nothing written); mentioning or DMing a Herdr agent needs `can_address_agents`; DM recipients must be an active member or a known agent; message at most 8,000 characters, no NUL; 20 writes per minute per member.
+- Chatter takes a name it does not know exactly as the one roster name it begins (a unique, case-insensitive prefix), and reads a mention case-sensitively, so a capital letter ends the token (`@everyoneX` is `@everyone`, `@codX` is `@cod`). The policy therefore fails closed: a mention counts under both readings (as Chatter reads it and as written, whole and lower-cased), and a handle that begins the name of a non-departed agent of the repo counts as addressing that agent (403 `agents_not_allowed` for a member who may not). A direct message to a member whose handle begins an agent's name, or the sender's own handle, is refused with 409 `ambiguous_recipient`, for an admin too, because Chatter would deliver it to the agent or back to the sender. Live Herdr agents that are not registered with Chatter match by prefix too and are invisible to the bridge.
 - Every push into an agent terminal, every `@everyone` and every registry change goes to the audit log.
 - The UI says "member" and shows kind as a badge; it never says "bot".
 
