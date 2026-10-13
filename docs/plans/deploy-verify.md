@@ -120,6 +120,43 @@ below is recorded as pass, fail or blocked, with the observed output (never a to
 9. A broken Chatter command answers a fixed message on `/healthz` and `/v1/repos` and the detail appears in the
    bridge's log (T13d's change, seen against a real failure).
 
+**T16 Close F17 (Flan, 2026-10-13: ask Herdr for live agents; narrow Codex round afterwards).** V3 reproduced that a live Herdr agent
+that Chatter's table does not hold is reachable past the bridge's policy (STATUS, F17). Chatter's `resolveRecipient` takes its
+candidates from the registered roster, the human's name and `teamAgents`: live named agents of the repo that `herdr agent list`
+reports; the bridge's policy sees only the table. The fix, in the bridge:
+1. `ChatterHost.liveAgents()` (`bridge/src/chatter.js`) runs `herdr agent list` the way Chatter's `sessionAgents` does (read
+   `herdr.ts`: the binary is `HERDR_BIN_PATH` or `herdr`, the JSON is parsed by `agentList`; mirror its parsing, including which
+   field is the name), with the host's own environment so that it reaches the same socket as the Chatter it runs. Cached about
+   2 s with in-flight sharing, like the agent cache of the board. Result: `{ names, status }` where `status` is `ok`, or `unknown`.
+   It is `ok` with an empty list when the binary cannot be spawned (ENOENT: no Herdr, so no live agents, as for Chatter) or when
+   Herdr answers that no server is running (`error.code` `server_not_running`; seen on 0.9.1); it is `unknown` for a timeout, any
+   other error, a non-zero exit with another answer, or output that is not the expected JSON. The detail goes to the operator log
+   only, never into an answer.
+2. Every policy decision counts every live name of the session as an agent, a deliberate over-approximation of Chatter's
+   per-repo rule: in `checkWrite` the live names are added to the exact agent set and to the repo's roster (`repoAgents`), so that
+   a restricted member's `@zed-helper`, `@zed` and `@zed-h` are refused 403 `agents_not_allowed` (the message names the agent,
+   as now), a DM to the member `zed` is refused 409 `ambiguous_recipient`, a DM to the exact live name is a DM to an agent
+   (`dm_agent` audited) and `@everyone` and the audit need no change. Both decisions of `postMessage` (before the lock and inside
+   it) load the live names, with the agent names, **before** the synchronous decision, so T13d's property holds: from the
+   decision to the spawn nothing awaits.
+3. When the status is `unknown`: a send by a member who may not address agents (non-admin, `can_address_agents` off) that
+   contains an `@mention` token or is a DM is refused 503 `agents_unverifiable` with a clear message (nothing written, no
+   rate-limit slot taken); a plain post without a mention is fine, and permitted members and admins are unaffected (as Chatter,
+   which sees no live agents then). `agents_unverifiable` is a new error code: the client's list (`client/src/api/errors.ts`) must
+   gain it (its drift test `client/src/api/error-codes.test.ts` fails otherwise); that one line is the only client change.
+4. Not in scope: the board and the directory keep listing registered agents only (Debt: they do not show live unregistered
+   agents, which Chatter's `agents --json` does not either).
+Tests first, each seen red on the untouched code: a fake `herdr` executable in a temp directory (`HERDR_BIN_PATH` in `makeEnv`'s
+host env; it prints a configured answer for `agent list`, exits 0 for other commands and logs each call to a file) for the cases
+of 7a and 7b (restricted and permitted senders; `@zed-h`, `@zed`, `@zed-helper`; a DM to the member `zed`; a DM to the exact live
+name), for the three `unknown` kinds (a hang past the timeout, an unexpected error, garbage), for ENOENT and `server_not_running`
+(both an empty list and every existing test unchanged), for the cache (a second send within 2 s does not run the binary again) and
+for the decision and the spawn sharing one run. Then the real regression test: `deploy/smoke/real-herdr-smoke.mjs` checks 7a, 7b
+and 8 must turn from fail to pass against a throwaway Herdr, with every interlock as before. Mutations that must turn a named test
+red: live names not unioned; the `unknown` branch removed; `unknown` treated as empty; ENOENT treated as unknown (the existing
+tests); the cache removed; the live load moved after the decision.
+Then a narrow Codex round limited to this diff, with the stop rule, and Flan hears of any further hard-boundary break first.
+
 **V4 A real agent run.** Agents: ideally a test Letta agent and a test Prime Agent (Flan provides them), and Claude Code and
 Codex CLI as standard agents (both are on the laptop, so they can start first). Install `skills/chatter-gui/` into each
 harness (project-local in a throwaway directory, or by path or `--skill`; never into `~/.claude/skills` or `~/.codex/skills`,
