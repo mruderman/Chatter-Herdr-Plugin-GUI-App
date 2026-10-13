@@ -1,0 +1,103 @@
+diff --git a/dist/src/board.js b/dist/src/board.js
+index 32f4937..5c6b108 100644
+--- a/dist/src/board.js
++++ b/dist/src/board.js
+@@ -158,14 +158,14 @@ function buildFeedLines(rows, width, human, openPointer) {
+             const you = m.from_agent === human ? ` ${T.FAINT}(you)${T.RESET}` : '';
+             let head;
+             if (!isDM) {
+-                head = `  ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you}`;
++                head = `  ${T.CHROME}#${m.id}${T.RESET} ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you}`;
+             }
+             else if (mine) {
+-                head = `  ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you} ${T.CYAN}[DM → ${m.to_agent === human ? 'you' : m.to_agent}]${T.RESET}`;
++                head = `  ${T.CHROME}#${m.id}${T.RESET} ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you} ${T.CYAN}[DM → ${m.to_agent === human ? 'you' : m.to_agent}]${T.RESET}`;
+             }
+             else {
+                 // Agent-to-agent DM: both names colored, visibly quieter.
+-                head = `  ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}→${T.RESET} ${T.author(m.to_agent)} ${T.CHROME}· ${localHM(m.created_at)} [DM]${T.RESET}`;
++                head = `  ${T.CHROME}#${m.id}${T.RESET} ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}→${T.RESET} ${T.author(m.to_agent)} ${T.CHROME}· ${localHM(m.created_at)} [DM]${T.RESET}`;
+             }
+             lines.push(head);
+         }
+@@ -549,8 +549,13 @@ function renderFeed(d, file, ui) {
+     // Fixed input bar.
+     const prompt = `${T.BOLD} › ${T.RESET}`;
+     const cursor = `${T.INV} ${T.RESET}`;
++    // hproto local change (2026-09-23): keep the input bar to one terminal row. An unwrapped
++    // long draft made the frame taller than the pane; show the draft's tail instead.
++    const room = Math.max(10, width - 5);
++    const chars = [...ui.buffer];
++    const shown = chars.length > room ? '…' + chars.slice(-(room - 1)).join('') : ui.buffer;
+     const inputRow = ui.buffer.length
+-        ? `${prompt}${ui.buffer}${cursor}`
++        ? `${prompt}${shown}${cursor}`
+         : `${prompt}${cursor}${T.FAINT} Message #${repoLabel(file)} — @name pushes${T.RESET}`;
+     const mention = ui.buffer.match(/@([a-z0-9_-]*)$/);
+     const mentionPrefix = mention?.[1] ?? '';
+@@ -736,7 +741,7 @@ function runView(render, { input = false } = {}) {
+         }
+         painter(render(d, file, ui));
+     };
+-    const painter = T.makePainter();
++    const painter = T.makePainter({ altScreen: true }); // hproto local change 2026-09-23, see tui.js
+     const scroll = (delta) => {
+         if (ui.offset === 0 && delta > 0)
+             ui.scrollBaseId = ui.lastMaxId;
+diff --git a/dist/src/team.js b/dist/src/team.js
+index a0022a3..b84836c 100644
+--- a/dist/src/team.js
++++ b/dist/src/team.js
+@@ -205,11 +205,14 @@ function resolveTarget(name, live, d = (0, db_1.db)()) {
+ }
+ // What gets injected into a session: sanitized (no control chars that could
+ // forge the [chatter] framing) and capped (full text stays in the DB).
+-const MAX_DELIVERY_CHARS = 700;
++const MAX_DELIVERY_CHARS = 700; // upstream value kept (Flan, 2026-09-10); only the truncation notice below is local
+ function deliveryText(body) {
+     let t = String(body).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+-    if (t.length > MAX_DELIVERY_CHARS)
+-        t = `${t.slice(0, MAX_DELIVERY_CHARS)}… (full text: chatter inbox --all)`;
++    if (t.length > MAX_DELIVERY_CHARS) {
++        // hproto local change: say that truncation happened and how much is missing.
++        const total = t.length;
++        t = `${t.slice(0, MAX_DELIVERY_CHARS)} [TRUNCATED: showing ${MAX_DELIVERY_CHARS} of ${total} chars; read the full message with: chatter inbox --all]`;
++    }
+     return t;
+ }
+ function chatUnreadCount(agent, d = (0, db_1.db)()) {
+@@ -321,7 +324,8 @@ function tryDeliver(msg, live, d = (0, db_1.db)()) {
+         d.prepare('UPDATE messages SET delivered_at = NULL WHERE id = ?').run(msg.id);
+         return false;
+     }
+-    d.prepare('UPDATE messages SET read_at = ? WHERE id = ?').run((0, db_1.now)(), msg.id);
++    // hproto local change: terminal submission is not a read receipt. read_at stays NULL;
++    // native acceptance is verified separately from the participant's native store.
+     return true;
+ }
+ // Best-effort flush of one repo's queue; zero subprocesses when it's empty.
+diff --git a/dist/src/tui.js b/dist/src/tui.js
+index 83599fe..1245884 100644
+--- a/dist/src/tui.js
++++ b/dist/src/tui.js
+@@ -116,11 +116,18 @@ function wrap(text, width) {
+     return out.length ? out : [''];
+ }
+ // Flicker-free painter: repaint in place, skip identical frames.
+-function makePainter() {
++function makePainter(opts = {}) {
+     let last = null;
++    // hproto local change (2026-09-23): long-lived views paint on the alternate screen.
++    // On the main screen any frame taller than the pane (a wrapped draft, a resize reflow
++    // over SSH) scrolls its top rows into scrollback on every repaint, which piled up as
++    // repeated "#workspace + first N lines" fragments. The alternate screen has no scrollback.
++    const alt = !!opts.altScreen;
++    if (alt)
++        process.stdout.write(`${ESC}[?1049h`);
+     process.stdout.write(`${ESC}[?25l`); // we draw our own cursor
+     const show = () => { try {
+-        process.stdout.write(`${ESC}[?25h${exports.RESET}`);
++        process.stdout.write(`${ESC}[?25h${exports.RESET}` + (alt ? `${ESC}[?1049l` : ''));
+     }
+     catch { /* gone */ } };
+     process.on('exit', show);

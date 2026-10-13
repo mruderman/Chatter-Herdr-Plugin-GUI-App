@@ -32,7 +32,9 @@ before any more features. M4 (archive, export, search) and the PWA wait for it, 
   `dist/src/team.js` (delivery truncation notice; a terminal submission no longer sets `read_at`), `dist/src/board.js`
   and `dist/src/tui.js` (alternate screen), and absolute paths in `herdr-plugin.toml`. A copy of the laptop's Chatter with
   exactly those three files patched (hashes equal production's) passes all 215 bridge tests. V3 uses that copy, not the
-  plain clone, so delivery behaves as on production.
+  plain clone, so delivery behaves as on production. It is rebuilt by `docs/runbooks/chatter-prod/rebuild.sh` (the diff and
+  the four hashes are committed beside it) into `~/src/chatter-prod`. Those 215 tests run without Herdr, so the patched
+  delivery code (`team.js`: the truncation notice, `read_at` left unset) has not run yet: V3 is its first exercise.
 - `chatter` is on `letta`'s PATH (`~/.local/bin/chatter`, a symlink to the checkout's `bin/chatter`, which runs
   `node --no-warnings --experimental-sqlite dist/bin/chatter.js`), so `CHATTER_CMD=chatter` works when the unit's PATH has
   `%h/.local/bin`. Node is `/usr/bin/node` 22.22.1: the bridge needs no `--experimental-sqlite` flag (`node:sqlite` is
@@ -61,7 +63,7 @@ reproduced, the 215 tests run against the patched copy: pass. What stays for the
 `letta` (it may need `tailscale set --operator=letta`), the port and `tailscale serve` port, and the bridge itself on Node
 22.22.1 (not run there).
 
-**V0 Isolate Herdr (coordinator, first).** Establish from Herdr's own help and docs (`herdr --help`, `herdr session`,
+**V0 Isolate Herdr (coordinator, first). DONE 2026-10-13: `docs/runbooks/herdr-test-env.md`.** An isolated `HOME` gives a Herdr with its own socket, config and state; the real directories were unchanged. Shown only while the real Herdr was stopped, so V3's harness must also prove it with a running default server (below). The original task text follows. Establish from Herdr's own help and docs (`herdr --help`, `herdr session`,
 `herdr status`, https://herdr.dev/llms.txt) how to run a Herdr that shares nothing with another session: a named session
 (`herdr --session <name>`), its socket, `HERDR_CONFIG_PATH`, and Chatter's `HERDR_PLUGIN_STATE_DIR`,
 `HERDR_PLUGIN_CONFIG_DIR` and `HERDR_BIN_PATH`. Prove it: `herdr session list` and `herdr status` before and after, a
@@ -75,7 +77,8 @@ SHA-256 of `index.html`. Release layout in the runbook: `releases/<git-sha>/dist
 symlink needs `systemctl --user restart chatter-bridge`. Test: the script run twice gives the same hash on the same
 commit; `check:dist` failing fails the script.
 
-**V2 The unit and the runbook.** Update `deploy/chatter-bridge.service`: `CHATTER_BRIDGE_STATIC_DIR`, an
+**V2 The unit and the runbook.** (Never `systemctl --user enable` or install the unit into the laptop's own
+`~/.config/systemd/user`: verify it with `systemd-analyze --user verify` and run the bridge by hand with the env file.) Update `deploy/chatter-bridge.service`: `CHATTER_BRIDGE_STATIC_DIR`, an
 `EnvironmentFile=` with `deploy/chatter-bridge.env.example` beside it (state directory, `CHATTER_CMD`, admin config,
 trust-Tailscale), and the comment that its hardening is untested. `docs/runbooks/deploy.md`: build, place, start,
 `tailscale serve --bg --https=8446 http://127.0.0.1:8791`, then verify (`/healthz`, the CSP header on `/`, the sign-in
@@ -84,7 +87,22 @@ to back up (`CHATTER_BRIDGE_STATE_DIR`); the archive is bound to the page's orig
 an empty archive; relevant from M4). Test: the unit passes `systemd-analyze --user verify`, and a clean user account
 or directory follows the runbook to a signed-in page on the test host.
 
-**V3 Real-Herdr smoke on the test host (throwaway session, dummy panes).** Dummy agents are panes running a program that
+**V3 Real-Herdr smoke on the test host (throwaway session, dummy panes).** The harness is code, and the safety checks are in the
+code, not only in the brief:
+- The bridge process runs with `HOME=$ISO` and the harness asserts that its `ChatterHost` env has `HERDR_SOCKET_PATH`
+  under `$ISO`, a throwaway `CHATTER_STATE_DIR`, and no `HERDR_PANE_ID` of any other Herdr.
+- Before the first send it refuses to continue if anything is listening on the real default socket
+  (`~/.config/herdr/herdr.sock`) or if the real directories' hash differs from the one taken at the start; it aborts on any
+  failed precondition. Teardown is in a `finally` or trap, and afterwards the harness checks the `herdr` process count by
+  command name (not `grep "[h]erdr server"`, which also matches shell lines) and the hash again.
+- The throwaway Herdr gets a `config.toml` with `update.version_check = false` and `update.manifest_check = false`
+  (both default to true and make background requests to herdr.dev).
+- The Chatter plugin is installed into `$ISO` from `~/src/chatter-prod` with the upstream `herdr-plugin.toml` (production's
+  has absolute `/home/letta` paths), so that its startup, flush and reap hooks run; without it item 1's "queued, then
+  delivered" would come out blocked for the wrong reason. How a dummy pane becomes a live named agent (for example
+  `herdr pane report-agent`) is recorded.
+- A reproduced break of a hard boundary (item 7 is the likeliest) is recorded and reported, never fixed inside the smoke task;
+  the fix is a separate task and Flan hears of it before any further review round. Dummy agents are panes running a program that
 only prints what it receives; the bridge runs against the throwaway Chatter state. `tmux-cli` may drive them. Each line
 below is recorded as pass, fail or blocked, with the observed output (never a token):
 1. A permitted member's `@agent` mention reaches the agent's pane: delivered, and queued when the pane is not ready
@@ -104,7 +122,9 @@ below is recorded as pass, fail or blocked, with the observed output (never a to
 
 **V4 A real agent run.** Agents: ideally a test Letta agent and a test Prime Agent (Flan provides them), and Claude Code and
 Codex CLI as standard agents (both are on the laptop, so they can start first). Install `skills/chatter-gui/` into each
-harness and use `clients/chatter-member.mjs` through the skill. How each loads it:
+harness (project-local in a throwaway directory, or by path or `--skill`; never into `~/.claude/skills` or `~/.codex/skills`,
+which are Flan's own configuration and every one of his sessions would load it; and against the throwaway bridge with a throwaway
+token) and use `clients/chatter-member.mjs` through the skill. How each loads it:
 - **Prime Agent** (told by Flan from its docs, `packages/coding-agent/docs/skills.md` and `rlm.md` in the open-source repo;
   not verified by me): progressive disclosure. At startup it scans `~/.prime/agent/skills/`, `~/.agents/skills/`, the
   project's `.prime/agent/skills/` and `.agents/skills/` (the working directory and its ancestors up to the git root),
