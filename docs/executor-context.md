@@ -19,7 +19,7 @@ Your task prompt lists the paths you hold. Everything else is read-only.
 |------|------|
 | Paths your task holds | edit |
 | Contract files named read-only in your prompt | frozen; if wrong, stop and report, do not edit |
-| `docs/SPEC.md`, `CLAUDE.md`, `docs/ui-contract.md`, `docs/executor-context.md`, `docs/plans/**`, root `package.json`, `clients/`, `skills/`, `deploy/` | do not edit |
+| `docs/SPEC.md`, `CLAUDE.md`, `docs/ui-contract.md`, `docs/executor-context.md`, `docs/plans/**`, root `package.json`, `clients/`, `skills/` | do not edit unless the task holds them; `deploy/` is held by the deploy-and-verify tasks only |
 | `client/package-lock.json`, `client/dist/`, `node_modules/` | never edit by hand |
 
 Off limits: pushing, touching `main`, `tailscale`, `herdr`, anything outside your worktree, adding dependencies, killing processes by name pattern, `playwright install` or any other download.
@@ -38,9 +38,9 @@ Generated or discovered by convention: `client/dist/`, `client/test-results/`, `
 ## 5. Commands
 Use absolute paths; the shell's cwd may not be where you think. Your worktree has the repo layout under its own root. The worktree isolation guard rejects some compound shell commands (`cd ... &&` chains, heredocs, loops that pipe into other tools), so run plain single commands: `git -C <path>`, `npm --prefix <path>`, and write files with the Write and Edit tools.
 - Shell state does not persist between calls. Put `CHATTER_JS=/home/cyanfam/src/chatter/dist/bin/chatter.js` in front of every command that needs it. Without it the contract tests skip silently, and skipped is not passing.
-- Bridge: `npm test` at the worktree root. Baseline: 30 pass, 0 skipped.
+- Bridge: `npm test` at the worktree root. Baseline: 215 pass, 0 skipped (end of M3); record the baseline of the commit you start from and say it.
 - Client (needs Node 22.13 or later): `node_modules` is not shared between worktrees, so your first client command is `npm --prefix client ci` (approved; it installs the vetted lockfile, `client/.npmrc` sets `ignore-scripts=true`, never change that). Then `npm --prefix client run typecheck`, `test` (Vitest, jsdom), `build`, `check:dist`, `e2e` (Playwright; it fails while there are no specs). Tests live next to the code in `client/src/**` or in `client/test/**`; `client/test/render.ts` renders a Preact vnode with `act` and cleans up. The Playwright browsers are already cached: never run `playwright install`.
-- Node 22.16 (needs 22.5 or later). `node:sqlite` is experimental; keep `--no-warnings`.
+- Node 22.16 (the bridge needs 22.5 or later, the client build 22.13 or later). `node:sqlite` is experimental; keep `--no-warnings`. The system `/usr/bin/node` on this laptop is 18, so use the nvm Node 22 on PATH.
 - Not sure about an API of Preact, Vite, Vitest, Playwright or axe? Fetch current docs: `npx ctx7@latest library <name> "<question>"`, then `npx ctx7@latest docs <id> "<question>"` (three commands at most per question). Do not rely on memory.
 
 ## 6. How to work
