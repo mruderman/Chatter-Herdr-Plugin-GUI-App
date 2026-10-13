@@ -2,12 +2,12 @@ import { screen, waitFor, within } from '@testing-library/dom';
 import { describe, expect, it } from 'vitest';
 import { cleanup } from '../../../test/render';
 import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError, ProtocolError } from '../../api/errors';
-import type { AuditEntry } from '../../api/types';
+import type { AuditEntry, UpdateMemberRequest } from '../../api/types';
 import { expectNoAxeViolations } from '../shell/test-utils';
 import { AUDIT_LIMIT } from './admin-view';
 import { MAYBE_DONE } from './failure';
 import { HANDLE_RULE } from './validation';
-import { StubBridge, auditTable, cells, loaded, memberRow, membersTable, renderAdmin, settle, status, type Rendered } from './test-support';
+import { PATCH_REFUSALS, StubBridge, auditTable, cells, loaded, memberRow, membersTable, renderAdmin, settle, status, type Rendered } from './test-support';
 
 type User = Rendered['user'];
 
@@ -712,15 +712,19 @@ describe('Admin view: edit member', () => {
   });
 
   it('shows a bare "internal error" with the hint that the change may have gone through, keeps the dialog and what was typed, and changes nothing else', async () => {
-    // The real bridge answers a Tailscale login that another member holds with exactly this (observed). It
-    // is a 500, which cannot say that nothing was changed, so the hint over-warns here and that is accepted.
-    const { user, bridge, refreshDirectory } = renderAdmin();
+    // The real bridge answers a Tailscale login that a revoked member still holds with exactly this
+    // (observed, and the same after it began to refuse a login that an active member holds with a 409, see
+    // below): its own check looks only at active members, so the database's uniqueness refuses the write.
+    // It is a 500, which cannot say that nothing was changed, so the hint over-warns here and that is accepted.
+    const bridge = new StubBridge();
+    bridge.registry = bridge.registry.map((member) => (member.handle === 'temp' ? { ...member, tailscale_login: 'temp@example.com' } : member));
+    const { user, refreshDirectory } = renderAdmin(bridge);
     await loaded();
     const dialog = within(await openEdit(user, 'ezra'));
-    await user.type(dialog.getByLabelText('Tailscale login (optional)'), 'mira@example.com');
+    await user.type(dialog.getByLabelText('Tailscale login (optional)'), 'temp@example.com');
     await user.click(dialog.getByRole('button', { name: 'Save' }));
     expect((await dialog.findByRole('alert')).textContent).toBe(`internal error. ${MAYBE_DONE}`);
-    expect((dialog.getByLabelText('Tailscale login (optional)') as HTMLInputElement).value).toBe('mira@example.com');
+    expect((dialog.getByLabelText('Tailscale login (optional)') as HTMLInputElement).value).toBe('temp@example.com');
     expect(screen.getByRole('dialog', { name: 'Edit ezra' })).toBeTruthy();
     // Nothing was changed, but the page cannot know it from a 500, so it asks again instead of assuming.
     expect(refreshDirectory).toHaveBeenCalledTimes(1);
@@ -728,6 +732,61 @@ describe('Admin view: edit member', () => {
     await waitFor(() => expect(bridge.callsTo('members')).toHaveLength(2));
     expect(bridge.callsTo('audit')).toHaveLength(2);
     expect(bridge.registry.find((member) => member.handle === 'ezra')?.tailscale_login).toBeNull();
+  });
+
+  it("shows the bridge's refusal of a login that another active member holds as an alert without the hint, keeps the dialog and what was typed, and changes nothing", async () => {
+    // mira is active and holds it. A 409 with one of the bridge's own codes is its word that nothing was
+    // changed (failure.ts), so nothing is asked for again and nothing is announced.
+    const { user, bridge, refreshDirectory } = renderAdmin();
+    await loaded();
+    const entries = bridge.entries.length;
+    const dialog = within(await openEdit(user, 'ezra'));
+    await user.type(dialog.getByLabelText('Tailscale login (optional)'), 'mira@example.com');
+    await user.click(dialog.getByRole('button', { name: 'Save' }));
+    expect((await dialog.findByRole('alert')).textContent).toBe('that Tailscale login is already mapped to a member');
+    await settle();
+    expect((dialog.getByLabelText('Tailscale login (optional)') as HTMLInputElement).value).toBe('mira@example.com');
+    expect(screen.getByRole('dialog', { name: 'Edit ezra' })).toBeTruthy();
+    expect(refreshDirectory).not.toHaveBeenCalled();
+    expect(status().textContent).toBe('');
+    expect(bridge.callsTo('members')).toHaveLength(1);
+    expect(bridge.callsTo('audit')).toHaveLength(1);
+    expect(bridge.entries).toHaveLength(entries);
+    expect(bridge.registry.find((member) => member.handle === 'ezra')?.tailscale_login).toBeNull();
+  });
+});
+
+// The edit tests above lean on the stand-in answering as the real bridge does, and
+// admin.integration.test.tsx asks the real bridge the same questions.
+describe('the stand-in bridge, asked to edit a member', () => {
+  it.each(PATCH_REFUSALS)('refuses $name with the answer of the real bridge, and writes nothing', async ({ patch, status: answered, code }) => {
+    const bridge = new StubBridge();
+    const registry = structuredClone(bridge.registry);
+    const entries = bridge.entries;
+    const failure = await bridge.updateMember('ezra', patch as UpdateMemberRequest).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ApiError);
+    expect(failure).toMatchObject({ status: answered, code });
+    expect(bridge.registry).toEqual(registry);
+    expect(bridge.entries).toEqual(entries);
+  });
+
+  it('refuses a login that an active member holds with 409 login_taken, and one that a revoked member holds with a bare 500', async () => {
+    const bridge = new StubBridge();
+    bridge.registry = bridge.registry.map((member) => (member.handle === 'temp' ? { ...member, tailscale_login: 'temp@example.com' } : member));
+    const active = await bridge.updateMember('ezra', { tailscale_login: 'mira@example.com' }).catch((error: unknown) => error);
+    expect(active).toMatchObject({ status: 409, code: 'login_taken', message: 'that Tailscale login is already mapped to a member' });
+    const revoked = await bridge.updateMember('ezra', { tailscale_login: 'temp@example.com' }).catch((error: unknown) => error);
+    expect(revoked).toMatchObject({ status: 500, code: 'internal', message: 'internal error' });
+    expect(bridge.registry.find((member) => member.handle === 'ezra')?.tailscale_login).toBeNull();
+  });
+
+  it("accepts a member's own login again, and stores and audits what the bridge makes of a patch: a name without its edges, an empty login as none", async () => {
+    const bridge = new StubBridge();
+    const own = await bridge.updateMember('mira', { tailscale_login: 'mira@example.com' });
+    expect(own.member.tailscale_login).toBe('mira@example.com');
+    const made = await bridge.updateMember('mira', { display_name: '  Mira M.  ', tailscale_login: '   ' });
+    expect(made.member).toMatchObject({ display_name: 'Mira M.', tailscale_login: null });
+    expect(bridge.entries[0]).toMatchObject({ action: 'member_update', target: 'mira', detail: { display_name: 'Mira M.', tailscale_login: null } });
   });
 });
 

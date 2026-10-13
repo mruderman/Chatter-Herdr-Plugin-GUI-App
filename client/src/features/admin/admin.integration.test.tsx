@@ -14,7 +14,7 @@ import { createApi, type FetchLike } from '../../api/client';
 import { setupUser } from '../shell/test-utils';
 import { AdminView } from './admin-view';
 import { MAYBE_DONE } from './failure';
-import { auditTable, cells, memberRow, membersTable, placesHolding, settle, status } from './test-support';
+import { PATCH_REFUSALS, auditTable, cells, memberRow, membersTable, placesHolding, settle, status } from './test-support';
 
 const CHATTER_JS = process.env.CHATTER_JS ?? '';
 const HAVE_CHATTER = CHATTER_JS !== '' && existsSync(CHATTER_JS);
@@ -230,17 +230,22 @@ describe.skipIf(!HAVE_CHATTER)('the Admin view against the real bridge and Chatt
   }, SLOW);
 
   it('shows a failure that the bridge does not explain in the bridge\'s own words and the hint that it may have gone through, and changes nothing else', async () => {
-    // Observed: PATCH with a Tailscale login that another member already holds fails inside the bridge
-    // with 500 "internal error", where POST says 409 login_taken. The dialog says what the bridge says,
-    // and since a 500 cannot say that nothing was changed (the bridge also answers it when only the audit
-    // entry of a change that was made fails), the hint follows, though here nothing was changed.
+    // Observed: PATCH with a Tailscale login that a revoked member still holds fails inside the bridge with
+    // 500 "internal error". The bridge's own check looks only at active members, so it is the database's
+    // uniqueness that refuses the write; with a login that an active member holds the bridge says 409
+    // login_taken, as the next test shows. The dialog says what the bridge says, and since the client takes
+    // any 500 for an answer that cannot say that nothing was changed (failure.ts), the hint follows,
+    // though here nothing was changed.
     for (const [handle, login] of [
       ['ana', 'ana@example.com'],
       ['bo', 'bo@example.com'],
+      ['cy', 'cy@example.com'],
     ]) {
       expect((await env.api('flan', 'POST', '/v1/members', { handle, kind: 'human', display_name: handle, tailscale_login: login })).status).toBe(201);
     }
-    const direct = await env.api('flan', 'PATCH', '/v1/members/bo', { tailscale_login: 'ana@example.com' });
+    // A revoked member keeps its login.
+    expect((await env.api('flan', 'DELETE', '/v1/members/cy')).status).toBe(200);
+    const direct = await env.api('flan', 'PATCH', '/v1/members/bo', { tailscale_login: 'cy@example.com' });
     expect(direct.status).toBe(500);
     const bridgeSays = errorOf(direct).message ?? '';
     // The catch-all of bridge/src/server.js. It ends with no mark, so the page adds a full stop before the hint.
@@ -250,7 +255,7 @@ describe.skipIf(!HAVE_CHATTER)('the Admin view against the real bridge and Chatt
     await loaded();
     await user.click(within(memberRow('bo')).getByRole('button', { name: 'Edit bo' }));
     await user.clear(screen.getByLabelText('Tailscale login (optional)'));
-    await user.type(screen.getByLabelText('Tailscale login (optional)'), 'ana@example.com');
+    await user.type(screen.getByLabelText('Tailscale login (optional)'), 'cy@example.com');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect((await screen.findByRole('alert')).textContent).toBe(`${bridgeSays}. ${MAYBE_DONE}`);
     expect(screen.getByRole('dialog', { name: 'Edit bo' })).toBeTruthy();
@@ -260,6 +265,55 @@ describe.skipIf(!HAVE_CHATTER)('the Admin view against the real bridge and Chatt
     const bo = ((await env.api('flan', 'GET', '/v1/members')).body as { members: Array<{ handle: string; tailscale_login: string | null }> }).members.find((m) => m.handle === 'bo');
     expect(bo?.tailscale_login).toBe('bo@example.com');
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
+  }, SLOW);
+
+  it("shows the bridge's refusal of a login that another active member holds, 409 login_taken, in its own words and without the hint, and changes nothing", async () => {
+    const reads = (): number => asked.filter((line) => /^GET \S*\/v1\/(members|audit)(\?\S*)? /.test(line)).length;
+    const entries = async (): Promise<number> => ((await env.api('flan', 'GET', '/v1/audit')).body as { entries: unknown[] }).entries.length;
+    const direct = await env.api('flan', 'PATCH', '/v1/members/bo', { tailscale_login: 'ana@example.com' });
+    expect(direct.status).toBe(409);
+    expect(errorOf(direct).code).toBe('login_taken');
+    const bridgeSays = errorOf(direct).message ?? '';
+    expect(bridgeSays).toBe('that Tailscale login is already mapped to a member');
+    const audited = await entries();
+
+    const { user, refreshDirectory } = open();
+    await loaded();
+    const readsBefore = reads();
+    await user.click(within(memberRow('bo')).getByRole('button', { name: 'Edit bo' }));
+    await user.clear(screen.getByLabelText('Tailscale login (optional)'));
+    await user.type(screen.getByLabelText('Tailscale login (optional)'), 'ana@example.com');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    // Exactly the bridge's words: a 409 with one of its own codes is its word that nothing happened.
+    expect((await screen.findByRole('alert')).textContent).toBe(bridgeSays);
+    await settle();
+    expect(screen.getByRole('dialog', { name: 'Edit bo' })).toBeTruthy();
+    expect((screen.getByLabelText('Tailscale login (optional)') as HTMLInputElement).value).toBe('ana@example.com');
+    // Nothing reloads, nothing is announced, and the bridge wrote nothing.
+    expect(refreshDirectory).not.toHaveBeenCalled();
+    expect(reads()).toBe(readsBefore);
+    expect(status().textContent).toBe('');
+    const bo = ((await env.api('flan', 'GET', '/v1/members')).body as { members: Array<{ handle: string; tailscale_login: string | null }> }).members.find((m) => m.handle === 'bo');
+    expect(bo?.tailscale_login).toBe('bo@example.com');
+    expect(await entries()).toBe(audited);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+  }, SLOW);
+
+  it('refuses the edits that the stand-in refuses with the same status and code, writes nothing, and stores a patch as the stand-in does', async () => {
+    const entries = async (): Promise<number> => ((await env.api('flan', 'GET', '/v1/audit')).body as { entries: unknown[] }).entries.length;
+    const audited = await entries();
+    for (const { name, patch, status: answered, code } of PATCH_REFUSALS) {
+      const reply = await env.api('flan', 'PATCH', '/v1/members/bo', patch);
+      expect({ name, status: reply.status, code: errorOf(reply).code }).toEqual({ name, status: answered, code });
+    }
+    expect(await entries()).toBe(audited);
+
+    // What the stand-in's last test claims about a stored patch: a name without its edges, an empty login as none.
+    const made = await env.api('flan', 'PATCH', '/v1/members/bo', { display_name: '  Bo B.  ', tailscale_login: '   ' });
+    expect(made.status).toBe(200);
+    expect((made.body as { member: unknown }).member).toMatchObject({ display_name: 'Bo B.', tailscale_login: null });
+    const audit = (await env.api('flan', 'GET', '/v1/audit')).body as { entries: Array<{ action: string; target: string; detail: unknown }> };
+    expect(audit.entries[0]).toMatchObject({ action: 'member_update', target: 'bo', detail: { display_name: 'Bo B.', tailscale_login: null } });
   }, SLOW);
 
   it('tells a member who is not an admin so, from the bridge\'s own 403, and offers nothing to change', async () => {

@@ -1,10 +1,12 @@
 // Shared by the admin tests; nothing in the app imports it. A stand-in for the bridge's member and
 // audit routes that answers as the real bridge does to what the views can send (bridge/src/store.js,
 // server.js; checked against a running bridge, see admin.integration.test.tsx): a taken handle or login,
-// an agent name, the last admin, a revoked member's login, a login clash on an edit, rotating a revoked
-// member. It does not model the checks the forms make first (handle pattern, "everyone", kind, role):
-// the real bridge refuses those too (400 bad_handle, bad_kind, bad_role) and the views never send them.
-// Also the checks the token tests share. Tokens here are throwaway strings that belong to no bridge.
+// an agent name, the last admin, a revoked member's login, rotating a revoked member, and on an edit
+// everything that updateMember refuses (a bad kind or role, an empty patch, a blank display name, a login
+// that another member holds). The add does not model the checks the forms make first (handle pattern,
+// "everyone", kind, role): the real bridge refuses those too (400 bad_handle, bad_kind, bad_role) and the
+// views never send them. Also the checks the token tests share. Tokens here are throwaway strings that
+// belong to no bridge.
 import { screen, within } from '@testing-library/dom';
 import type { UserEvent } from '@testing-library/user-event';
 import { act } from 'preact/test-utils';
@@ -33,6 +35,21 @@ export const ADMIN = 'flan';
 
 /** A name the bridge treats as a Herdr agent: a member may not take it as a handle. */
 export const AGENT_NAME = 'codex';
+
+/**
+ * Edits that the bridge refuses whichever member they are for, with the answer it gives
+ * (bridge/src/store.js updateMember). The stand-in is checked against this table in admin-view.test.tsx
+ * and the real bridge in admin.integration.test.tsx, so that the two cannot drift apart unseen.
+ */
+export const PATCH_REFUSALS: ReadonlyArray<{ readonly name: string; readonly patch: unknown; readonly status: number; readonly code: string }> = [
+  { name: 'a kind that is neither human nor computational', patch: { kind: 'robot' }, status: 400, code: ERROR_CODES.badKind },
+  { name: 'a role that is neither admin nor member', patch: { role: 'owner' }, status: 400, code: ERROR_CODES.badRole },
+  { name: 'an empty patch', patch: {}, status: 400, code: ERROR_CODES.badRequest },
+  { name: 'a display name that is blank', patch: { display_name: '   ' }, status: 400, code: ERROR_CODES.badRequest },
+];
+
+const KINDS: readonly string[] = ['human', 'computational'];
+const ROLES: readonly string[] = ['admin', 'member'];
 
 export interface Call {
   readonly method: string;
@@ -165,17 +182,34 @@ export class StubBridge implements AdminApi {
   async updateMember(handle: string, patch: UpdateMemberRequest): Promise<MemberResult> {
     await this.enter('updateMember', handle, patch);
     const member = this.find(handle);
+    // bridge/src/store.js updateMember, in its order and its words. A refusal writes nothing.
+    if (!Object.keys(patch).length) throw new ApiError(400, ERROR_CODES.badRequest, 'nothing to change');
+    if ('display_name' in patch && (typeof patch.display_name !== 'string' || !patch.display_name.trim())) {
+      throw new ApiError(400, ERROR_CODES.badRequest, 'display name must not be empty');
+    }
+    // What is stored is what the bridge made of the patch: a name without its edges, and an empty login
+    // as none at all.
+    const updated: Member = {
+      ...member,
+      ...patch,
+      ...('display_name' in patch ? { display_name: (patch.display_name ?? '').trim() } : {}),
+      ...('tailscale_login' in patch ? { tailscale_login: patch.tailscale_login?.trim() || null } : {}),
+    };
+    if (!KINDS.includes(updated.kind)) throw new ApiError(400, ERROR_CODES.badKind, 'kind must be human or computational');
+    if (!ROLES.includes(updated.role)) throw new ApiError(400, ERROR_CODES.badRole, 'role must be admin or member');
+    const holders = updated.tailscale_login ? this.registry.filter((other) => other.handle !== handle && other.tailscale_login === updated.tailscale_login) : [];
+    if (holders.some((other) => other.status === 'active')) {
+      throw new ApiError(409, ERROR_CODES.loginTaken, 'that Tailscale login is already mapped to a member');
+    }
     if (patch.role && patch.role !== member.role && member.role === 'admin' && this.activeAdmins() <= 1) {
       throw new ApiError(409, ERROR_CODES.lastAdmin, 'cannot demote the last admin');
     }
-    // What the real bridge does with a login that another member already holds (observed): the database
-    // refuses it and the bridge answers a bare 500, where adding such a member says 409 login_taken.
-    if (patch.tailscale_login && this.registry.some((other) => other.handle !== handle && other.tailscale_login === patch.tailscale_login)) {
-      throw new ApiError(500, ERROR_CODES.internal, 'internal error');
-    }
-    const updated: Member = { ...member, ...patch };
+    // A revoked member keeps its login, which the check above does not look at, so what refuses it is the
+    // database's uniqueness, and what comes back is a bare 500 (observed, and the same when adding).
+    if (holders.length > 0) throw new ApiError(500, ERROR_CODES.internal, 'internal error');
     this.registry = this.registry.map((candidate) => (candidate.handle === handle ? updated : candidate));
-    this.log(ADMIN, 'member_update', handle, { ...patch });
+    // The bridge audits what was stored, not what was sent.
+    this.log(ADMIN, 'member_update', handle, Object.fromEntries(Object.keys(patch).map((key) => [key, Reflect.get(updated, key)])));
     return { member: clone(updated) };
   }
 

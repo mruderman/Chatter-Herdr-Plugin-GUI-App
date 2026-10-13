@@ -2,7 +2,10 @@
 // class and a code and never inspect a Response. None of them carries a token: requests are
 // described by path only, and the fetch failure kept as `cause` holds no request headers.
 
-/** Codes the bridge sends in `{"error":{"code","message"}}`, collected from bridge/src. */
+/**
+ * Codes the bridge sends in `{"error":{"code","message"}}`. error-codes.test.ts reads bridge/src and
+ * fails when this list and the bridge's differ, so a new bridge code cannot be forgotten.
+ */
 export const ERROR_CODES = {
   unauthenticated: 'unauthenticated',
   badToken: 'bad_token',
@@ -18,6 +21,8 @@ export const ERROR_CODES = {
   bodyTooLarge: 'body_too_large',
   selfDm: 'self_dm',
   unknownRecipient: 'unknown_recipient',
+  /** A direct message refused because the handle begins an agent's name or the sender's own handle (409). */
+  ambiguousRecipient: 'ambiguous_recipient',
   rateLimited: 'rate_limited',
   notFound: 'not_found',
   badRepo: 'bad_repo',
