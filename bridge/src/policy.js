@@ -76,12 +76,16 @@ export function checkWrite({ member, to, body, agentNames, repoAgents, liveAgent
   const toMember = memberHandles.has(to);
   if (!toAgent && !toMember) throw new HttpError(404, 'unknown_recipient', `no agent or member named "${to}"`);
   // A private message must reach the one it names, never an agent Chatter resolves the name to instead, nor
-  // its sender, so admins are refused too. Chatter resolves it against this repo's live roster, while
-  // `agentNames` spans every repo and departed agents: an agent's name counts as itself only if it is on that
-  // roster (the live names included), and otherwise, like a member's handle, it must not be the start of a
-  // name that is.
+  // its sender, so admins are refused too. Chatter resolves it against this repo's roster and the live agents
+  // whose cwd is in this repo, while `agentNames` spans every repo and departed agents, and Herdr's list the
+  // whole session: an agent's name counts as itself only if Chatter is sure to find it exactly, and otherwise,
+  // like a member's handle, it must not be the start of a name that is a candidate.
   const started = agentsStartingWith(to);
-  const onRoster = toAgent && started.some((n) => n.toLowerCase() === to.toLowerCase());
+  const exactlyIn = (names) => names.some((n) => n.toLowerCase() === to.toLowerCase());
+  // On this repo's registered roster, Chatter matches it before any prefix. A name only Herdr's list offers
+  // may belong to another repo, which Chatter leaves out here; then it would take the name for one that begins
+  // with it, so such a name counts as itself only when nothing else begins with it.
+  const onRoster = toAgent && (exactlyIn(repoAgents) || (exactlyIn(liveAgents.names) && started.length === 1));
   if (started.length && !onRoster) {
     const advice = toAgent ? `"${to}" is not a live agent of this repo.` : 'An admin can rename the member or the agent.';
     throw new HttpError(409, AMBIGUOUS_RECIPIENT, `"${to}" is the start of the name of the Herdr agent ${started.join(', ')}, so Chatter could deliver this message to the agent instead; nothing was sent. ${advice}`);

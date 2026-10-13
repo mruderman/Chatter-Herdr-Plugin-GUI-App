@@ -186,7 +186,8 @@ test('policy: a live agent only Herdr knows counts as an agent, by its exact nam
   assert.equal(dm.toAgent, true);
   assert.equal(dm.toMember, false);
   refused(() => checkWrite({ member: off, to: 'zed-helper', body: 'x', ...p }), 'agents_not_allowed');
-  // Chatter refuses a DM to a bare prefix that is no member (it would need --queue and an exact name): as before.
+  // A bare prefix that names no agent and no member is refused by the bridge (404), as before; Chatter itself
+  // would take it, through `resolveRecipient`, as the one live agent it is the start of.
   refused(() => checkWrite({ member: member(), to: 'zed-h', body: 'x', ...p }), 'unknown_recipient');
   // A permitted member may still mention zed, and Chatter will push it to zed-helper.
   assert.deepEqual(checkWrite({ member: member(), to: '#chat', body: '@zed hi', ...p }).memberTargets, ['zed']);
@@ -194,6 +195,41 @@ test('policy: a live agent only Herdr knows counts as an agent, by its exact nam
   const none = { ...p, liveAgents: NO_LIVE };
   assert.equal(checkWrite({ member: off, to: '#chat', body: '@zed hi', ...none }).mode, 'post');
   assert.equal(checkWrite({ member: off, to: 'zed', body: 'x', ...none }).toMember, true);
+});
+
+// T16b. Herdr's list spans the session, while Chatter's candidates in a repo are its roster and the live agents
+// whose cwd is in it. A name only Herdr's list offers may belong to another repo, where Chatter cannot see it:
+// it counts as itself only when nothing else here begins with it, or Chatter would take it for that other name.
+test('policy: an exact live name that a name of the roster begins with is refused, for a permitted member and an admin', () => {
+  const memberHandles = new Set(['flan', 'thom', 'zed']);
+  const worlds = [
+    ['a live-only zed beside a registered zed-helper', { agentNames: new Set(['zed-helper']), repoAgents: ['zed-helper'], liveAgents: { names: ['zed'], status: 'ok' } }],
+    ['a live-only zed beside a live-only zed-helper', { agentNames: new Set(), repoAgents: [], liveAgents: { names: ['zed', 'zed-helper'], status: 'ok' } }],
+  ];
+  for (const [world, p] of worlds) {
+    for (const who of [member(), admin]) {
+      const e = refusal(() => checkWrite({ member: who, to: 'zed', body: 'x', memberHandles, ...p }));
+      assert.equal(e.code, 'ambiguous_recipient', `${world}, ${who.handle}`);
+      assert.equal(e.status, 409);
+      assert.match(e.message, /^"zed" is the start of the name of the Herdr agent (zed-helper, zed|zed, zed-helper), so Chatter could deliver this message to the agent instead; nothing was sent\. "zed" is not a live agent of this repo\.$/, world);
+    }
+  }
+});
+
+test('policy: an exact name of the roster, or a live name nothing else begins with, is still that agent; a member\'s handle that begins one is still refused', () => {
+  // Registered here, and the start of another registered name: Chatter matches the exact candidate first.
+  const registered = { agentNames: new Set(['zed', 'zed-helper']), repoAgents: ['zed', 'zed-helper'], liveAgents: NO_LIVE, memberHandles: new Set(['flan', 'thom']) };
+  for (const who of [member(), admin]) assert.equal(checkWrite({ member: who, to: 'zed', body: 'x', ...registered }).toAgent, true, who.handle);
+  // Registered and live at once: the same.
+  assert.equal(checkWrite({ member: member(), to: 'zed', body: 'x', ...registered, liveAgents: { names: ['zed', 'zed-helper'], status: 'ok' } }).toAgent, true);
+  // Live only, and nothing else begins with it: nothing for Chatter to take it for.
+  const alone = { agentNames: new Set(['codex']), repoAgents: ['codex'], liveAgents: { names: ['zed-helper'], status: 'ok' }, memberHandles: new Set(['flan', 'thom', 'zed']) };
+  for (const who of [member(), admin]) assert.equal(checkWrite({ member: who, to: 'zed-helper', body: 'x', ...alone }).toAgent, true, who.handle);
+  // The member zed, whose handle begins zed-helper, live or registered: refused as before.
+  const registeredHelper = { ...alone, agentNames: new Set(['zed-helper']), repoAgents: ['zed-helper'], liveAgents: NO_LIVE };
+  for (const p of [alone, registeredHelper]) {
+    for (const who of [member(), admin]) refused(() => checkWrite({ member: who, to: 'zed', body: 'x', ...p }), 'ambiguous_recipient');
+  }
 });
 
 test('policy: when Herdr could not say which agents are live, a member who may not address agents may name no one', () => {

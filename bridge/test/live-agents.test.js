@@ -4,6 +4,7 @@
 // (helpers.js, makeFakeHerdr) or a path that does not exist, and every host built here is given its whole
 // environment, with only the fake's directory on PATH: the real `herdr` is on this machine's PATH.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -375,8 +376,10 @@ describe('T16 item 1: no Herdr, or no Herdr server, is no live agents, and nothi
 });
 
 describe('T16 item 2: the live agents are loaded with the agent names, before each decision of a send', { skip: SKIP }, () => {
-  test('two sends within 2 s run herdr agent list once: the first send\'s two decisions share it, the second send reuses it', async () => {
-    const x = await makeEnv({ fakeHerdr: true });
+  test('two sends within the TTL run herdr agent list once: the first send\'s two decisions share it, the second send reuses it', async () => {
+    // A TTL no runner is slow enough to outlast: the test is about reuse, not about how long; the default
+    // is checked at the host level above.
+    const x = await makeEnv({ fakeHerdr: true, hostOptions: { liveTtlMs: 60_000 } });
     try {
       x.addMember('ada');
       const runs = () => x.herdr.ownListRuns().length;
@@ -435,5 +438,53 @@ describe('T16 item 2: the live agents are loaded with the agent names, before ea
       assert.equal(r.status, 201, JSON.stringify(r.body));
       assert.deepEqual(events, ['live', 'decide', 'live', 'decide', 'spawn', 'next']);
     } finally { await x.stop(); }
+  });
+});
+
+describe('T16b: an exact name that only Herdr\'s session-wide list offers does not waive the wrong-recipient check', { skip: SKIP }, () => {
+  // Here: zed-helper, registered and live, and kit-runner, live only, nothing else beginning with it. In another
+  // repo: a live, unregistered agent named zed, which Chatter's `teamAgents` leaves out here. And the member zed.
+  const FOREIGN_PANE = 'w2:p1';
+  const ALONE = 'kit-runner';
+  const ALONE_PANE = 'w1:p3';
+  let x;
+  before(async () => {
+    x = await makeEnv({ fakeHerdr: true });
+    x.addMember('ada');
+    x.addMember('zed', { kind: 'human' });
+    x.seedAgent(HIDDEN);
+    const other = path.join(x.root, 'other-repo');
+    fs.mkdirSync(other);
+    const git = (...a) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...a], { cwd: other, stdio: 'ignore' });
+    git('init', '-q');
+    git('commit', '--allow-empty', '-q', '-m', 'init');
+    x.herdr.answer({
+      stdout: agentListJson([
+        hiddenAgent(x),
+        { pane_id: FOREIGN_PANE, name: 'zed', workspace_id: 'w2', cwd: other, branch: null, agent: 'pi', agent_status: 'idle' },
+        { pane_id: ALONE_PANE, name: ALONE, workspace_id: 'w1', cwd: x.repo, branch: null, agent: 'pi', agent_status: 'idle' },
+      ]),
+    });
+  });
+  after(async () => { await x.stop(); });
+
+  test('a DM to zed is refused 409: Chatter here would take it for zed-helper; nothing is written or typed', async () => {
+    const before = { rows: x.count(), prompts: x.herdr.prompts().length };
+    const r = await x.post('ada', 'zed', 'private, for the member zed');
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.equal(r.body.error.code, ERR.ambiguous);
+    assert.match(r.body.error.message, /^"zed" is the start of the name of the Herdr agent zed-helper, zed, /);
+    assert.equal(x.count(), before.rows, 'nothing was written');
+    assert.equal(x.herdr.prompts().length, before.prompts, 'nothing was typed into any terminal');
+    assert.ok(!(await audits(x)).some((a) => a.actor === 'ada' && a.target === 'zed'), 'nothing audited');
+  });
+
+  test('a DM to an exact live name nothing else begins with is still a DM to that agent: delivered and audited', async () => {
+    const body = 'a DM from ada to the live kit-runner';
+    const r = await x.post('ada', ALONE, body);
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal(r.body.delivery, 'delivered');
+    assert.ok(x.herdr.prompts().some((p) => p.pane === ALONE_PANE && p.text.includes(body)), 'Chatter typed it into kit-runner\'s terminal');
+    assert.ok((await audits(x)).some((a) => a.actor === 'ada' && a.action === 'dm_agent' && a.target === ALONE && a.message_id === r.body.id), 'audited as a DM to an agent');
   });
 });
