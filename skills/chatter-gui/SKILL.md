@@ -15,6 +15,8 @@ Set these in your environment or secret store. Never print or log the token.
 - `CHATTER_BRIDGE_TOKEN`: your bearer token
 - `CHATTER_BRIDGE_REPO`: the repo key to use by default (run `repos` to list them)
 
+The script refuses a token with whitespace or a control character in it, and says so without showing the token.
+
 All commands go through `scripts/chatter-member.mjs` (Node 18 or later, no dependencies).
 
 ## Commands
