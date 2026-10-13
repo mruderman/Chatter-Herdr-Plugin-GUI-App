@@ -212,19 +212,21 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
   async function postMessage(actor, key, body) {
     const repo = await host.repo(key);
     if (repo.orphan || !repo.repo_root) throw new HttpError(409, 'repo_unwritable', 'repo no longer exists on this host');
-    // Synchronous, and given the agent names already loaded, so that a caller can decide and act in one run.
-    // It reads the registry and the roster as they are now: the sender still active, with the credential the
-    // request came with, and their role and flags as they are.
-    const decideWith = (agentNames) => {
+    // Synchronous, and given the agent names and the live agents already loaded, so that a caller can decide
+    // and act in one run. It reads the registry and the roster as they are now: the sender still active, with
+    // the credential the request came with, and their role and flags as they are.
+    const decideWith = ([agentNames, liveAgents]) => {
       const current = actor.now();
       const members = activeHandles();
       const decision = checkWrite({
-        member: current, to: body.to, body: body.body, agentNames, repoAgents: host.rosterNames(repo), memberHandles: members, limits,
+        member: current, to: body.to, body: body.body, agentNames, repoAgents: host.rosterNames(repo), liveAgents, memberHandles: members, limits,
       });
       return { decision, members };
     };
+    // Who counts as an agent: the agents tables, and the live agents Herdr reports, which Chatter also counts.
+    const loadAgents = () => Promise.all([host.agentNames(), host.liveAgents()]);
     // Refused here, a send answers at once and costs no rate-limit token.
-    decideWith(await host.agentNames());
+    decideWith(await loadAgents());
     // Taken before the lock, so that one member cannot queue unlimited sends behind it. A send admitted here
     // keeps its slot even if it is refused when it is decided again inside the lock.
     limiter.take(actor.handle);
@@ -235,8 +237,7 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
       // allows. The one await comes first. From the decision to the spawn nothing awaits, so nothing else in
       // this process runs between them: `host.run` spawns the child before it returns (`ChatterHost.run` is
       // not async, and makes the member's config directory synchronously before it spawns).
-      const agentNames = await host.agentNames();
-      const { decision, members } = decideWith(agentNames);
+      const { decision, members } = decideWith(await loadAgents());
       const db = host.openRO(repo);
       const before = maxMessageId(db);
       // `--queue` always follows the body, so a body that is literally "--queue" survives (see cmdSend).

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { LIVE_STATUS } from './policy.js';
 import { HttpError } from './util.js';
 
 // The README calls Chatter's SQLite layout an internal detail, so the bridge
@@ -18,6 +19,37 @@ const EXPECTED_COLUMNS = {
 const KEY_RE = /^[A-Za-z0-9._-]+$/;
 // What every caller of the repo listing is told when Chatter fails, /healthz's unauthenticated one included.
 const REPOS_FAILED = 'Chatter could not list the repositories';
+// Herdr's answer when no server runs on the socket it was pointed at (seen on 0.9.1): no live agents.
+const HERDR_NO_SERVER = 'server_not_running';
+const OUTPUT_CAP = 1_000_000;
+const LOG_CLIP = 2000;
+
+const isRecord = (v) => typeof v === 'object' && v !== null;
+const clip = (s) => (s.length > LOG_CLIP ? `${s.slice(0, LOG_CLIP)}...` : s);
+
+/**
+ * What `herdr agent list` answered, read as Chatter reads it (`herdr()` and `agentList` in its herdr.ts): the
+ * answer is stdout, or stderr when stdout is empty; the agents are `result.agents`; an entry counts only if
+ * it is an object with a string `pane_id`, and its name is `name` when that is a non-empty string (Chatter's
+ * `resolveRecipient` adds `a.name` only when it is truthy). No working-directory filter: every live name of
+ * the session is returned, where Chatter keeps those whose cwd is in the repo (`teamAgents`).
+ * Stricter than Chatter on failure: Chatter takes any failed or unexpected answer as "no live agents"; here
+ * only Herdr's "no server is running" is, and anything else is `unknown`, with the reason for the log.
+ */
+export function readAgentList(code, stdout, stderr) {
+  const raw = stdout.trim() || stderr.trim();
+  let json = null;
+  try { json = JSON.parse(raw); } catch { /* not JSON: judged below */ }
+  if (isRecord(json) && isRecord(json.error) && json.error.code === HERDR_NO_SERVER) return { names: [], status: LIVE_STATUS.ok };
+  if (code !== 0) return { names: [], status: LIVE_STATUS.unknown, why: `exited ${code}: ${clip(raw)}` };
+  if (!isRecord(json) || !isRecord(json.result) || !Array.isArray(json.result.agents)) {
+    return { names: [], status: LIVE_STATUS.unknown, why: `answered something other than an agent list: ${clip(raw)}` };
+  }
+  const names = json.result.agents
+    .filter((a) => isRecord(a) && typeof a.pane_id === 'string' && typeof a.name === 'string' && a.name)
+    .map((a) => a.name);
+  return { names: [...new Set(names)], status: LIVE_STATUS.ok };
+}
 
 export class ChatterHost {
   /**
@@ -27,21 +59,38 @@ export class ChatterHost {
    * @param {string|null} [o.adminConfigDir]  Chatter config dir of the human admin (default: Chatter's own)
    * @param {string|null} [o.stateDir]    HERDR_PLUGIN_STATE_DIR passthrough
    * @param {(line: string) => void} [o.log]  the operator's log, for what Chatter printed when it failed
+   * @param {number} [o.herdrTimeoutMs]   how long `herdr agent list` may take before the answer is unknown
+   * @param {number} [o.liveTtlMs]        how long an answer of `herdr agent list` is kept
    */
-  constructor({ cmd, memberConfigRoot, adminConfigDir = null, stateDir = null, timeoutMs = 15_000, env = process.env, log = () => {} }) {
+  constructor({ cmd, memberConfigRoot, adminConfigDir = null, stateDir = null, timeoutMs = 15_000, herdrTimeoutMs = 5000, liveTtlMs = 2000, env = process.env, log = () => {} }) {
     if (!cmd?.length) throw new Error('ChatterHost needs a command');
     this.cmd = cmd;
     this.memberConfigRoot = memberConfigRoot;
     this.adminConfigDir = adminConfigDir;
     this.stateDir = stateDir;
     this.timeoutMs = timeoutMs;
+    this.herdrTimeoutMs = herdrTimeoutMs;
+    this.liveTtlMs = liveTtlMs;
     this.env = env;
     this.log = log;
     this._repos = null;
     this._reposAt = 0;
     this._reposInflight = null;
+    this._live = null;
+    this._liveAt = 0;
+    this._liveInflight = null;
     this._dbs = new Map();
     this._locks = new Map();
+  }
+
+  /**
+   * The environment of every program the host runs, Chatter and Herdr alike, so that the bridge's own
+   * `herdr agent list` reaches the socket the Chatter it runs reaches. Never a pane's: the bridge is no agent.
+   */
+  baseEnv() {
+    const env = { ...this.env };
+    for (const k of Object.keys(env)) if (/^HERDR_PANE/.test(k)) delete env[k];
+    return env;
   }
 
   // ----------------------------------------------------------- identities
@@ -65,8 +114,7 @@ export class ChatterHost {
   // ------------------------------------------------------------------ CLI
   /** Run the Chatter CLI as a member. argv array, never a shell. */
   run({ handle, admin = false, cwd, args }) {
-    const env = { ...this.env };
-    for (const k of Object.keys(env)) if (/^HERDR_PANE/.test(k)) delete env[k];
+    const env = this.baseEnv();
     if (admin) {
       if (this.adminConfigDir) env.HERDR_PLUGIN_CONFIG_DIR = this.adminConfigDir;
       else delete env.HERDR_PLUGIN_CONFIG_DIR;
@@ -178,6 +226,65 @@ export class ChatterHost {
    */
   rosterNames(repo) {
     return this.openRO(repo).prepare('SELECT name FROM agents WHERE departed_at IS NULL').all().map((r) => r.name);
+  }
+
+  /**
+   * The names of the live agents Herdr reports for the whole session, which Chatter's `resolveRecipient`
+   * also counts (for the agents whose cwd is in the repo) though the agents table may not hold them. Run as
+   * Chatter's `sessionAgents` runs it: `herdr agent list`, the binary `HERDR_BIN_PATH` or `herdr`, with the
+   * environment the host gives Chatter. Kept `liveTtlMs`; callers meanwhile share one run. Never rejects:
+   * `status` is `ok`, or `unknown` when Herdr's answer could not be read, whose detail goes to the log only.
+   * @returns {Promise<{ names: string[], status: string }>}
+   */
+  async liveAgents() {
+    if (this._live && Date.now() - this._liveAt < this.liveTtlMs) return this._live;
+    if (!this._liveInflight) {
+      this._liveInflight = this._listLive().then((live) => {
+        this._live = live;
+        this._liveAt = Date.now();
+        return live;
+      }).finally(() => { this._liveInflight = null; });
+    }
+    return this._liveInflight;
+  }
+
+  _listLive() {
+    const bin = this.env.HERDR_BIN_PATH || 'herdr';
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = ({ names, status, why }) => {
+        if (settled) return;
+        settled = true;
+        if (status !== LIVE_STATUS.ok) this.log(`herdr agent list ${why}`);
+        resolve(Object.freeze({ names: Object.freeze(names), status }));
+      };
+      let child;
+      try {
+        // A working directory that always exists, so that ENOENT can only mean the binary is missing.
+        child = spawn(bin, ['agent', 'list'], { cwd: '/', env: this.baseEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) {
+        done({ names: [], status: LIVE_STATUS.unknown, why: `could not be run: ${e.message}` });
+        return;
+      }
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+      const cap = (s, d) => (s.length > OUTPUT_CAP ? s : s + d);
+      child.stdout.on('data', (d) => { stdout = cap(stdout, d); });
+      child.stderr.on('data', (d) => { stderr = cap(stderr, d); });
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, this.herdrTimeoutMs);
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        // No Herdr installed: no live agents, as Chatter's `herdr()` finds none when it cannot start herdr.
+        if (e.code === 'ENOENT') done({ names: [], status: LIVE_STATUS.ok });
+        else done({ names: [], status: LIVE_STATUS.unknown, why: `could not be run: ${e.message}` });
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        if (timedOut) done({ names: [], status: LIVE_STATUS.unknown, why: `gave no answer within ${this.herdrTimeoutMs} ms` });
+        else done(readAgentList(code, stdout, stderr));
+      });
+    });
   }
 
   close() {

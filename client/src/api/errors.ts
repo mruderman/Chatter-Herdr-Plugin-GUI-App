@@ -13,6 +13,7 @@ export const ERROR_CODES = {
   adminOnly: 'admin_only',
   everyoneAdminOnly: 'everyone_admin_only',
   agentsNotAllowed: 'agents_not_allowed',
+  agentsUnverifiable: 'agents_unverifiable',
   badRequest: 'bad_request',
   badJson: 'bad_json',
   emptyBody: 'empty_body',

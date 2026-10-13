@@ -9,7 +9,9 @@ import { mentionsOf, chatterTime } from '../src/util.js';
 
 const member = (o = {}) => ({ handle: 'thom', role: 'member', can_address_agents: true, ...o });
 const admin = member({ handle: 'flan', role: 'admin' });
-const ctx = { agentNames: new Set(['codex', 'pi']), repoAgents: [], memberHandles: new Set(['flan', 'thom', 'grace']) };
+// What ChatterHost.liveAgents() answers when Herdr reports no live agent (or is not installed).
+const NO_LIVE = Object.freeze({ names: [], status: 'ok' });
+const ctx = { agentNames: new Set(['codex', 'pi']), repoAgents: [], liveAgents: NO_LIVE, memberHandles: new Set(['flan', 'thom', 'grace']) };
 const refused = (fn, code) => assert.throws(fn, (e) => e.code === code, `expected ${code}`);
 
 test('mentionsOf follows Chatter grammar and finds @everyone case-insensitively', () => {
@@ -41,7 +43,7 @@ test('mentionsOf keeps reading each mention whole and case-insensitively', () =>
 });
 
 test('policy: a mention is checked as Chatter reads it as well as whole', () => {
-  const p = { agentNames: new Set(['codex-worker']), repoAgents: ['codex-worker'], memberHandles: new Set(['flan', 'thom', 'kai']) };
+  const p = { agentNames: new Set(['codex-worker']), repoAgents: ['codex-worker'], liveAgents: NO_LIVE, memberHandles: new Set(['flan', 'thom', 'kai']) };
   const off = member({ can_address_agents: false });
   for (const body of ['hey @codX', 'hey @codex-workerZ']) {
     refused(() => checkWrite({ member: off, to: '#chat', body, ...p }), 'agents_not_allowed');
@@ -79,6 +81,7 @@ test('policy: a name that is the start of a live agent name of the repo counts a
     agentNames: new Set(['codex-worker', 'grace-worker', 'old']),
     memberHandles: new Set(['flan', 'thom', 'grace', 'zed', 'zedd']),
     repoAgents: ['codex-worker', 'grace-worker'],
+    liveAgents: NO_LIVE,
   };
   const off = member({ can_address_agents: false });
   for (const body of ['@codex', '@CODEX-w', 'ping @grace', '@codex-worker']) {
@@ -99,7 +102,7 @@ test('policy: a name that is the start of a live agent name of the repo counts a
 // T13c item 5. Chatter resolves a DM against the roster of the repo it is sent in: a name that is not a live
 // agent's exactly goes to the one live name it is the start of.
 test('policy: a DM to an agent name counts as that agent only if it is a live name of the repo', () => {
-  const p = { agentNames: new Set(['codex-worker', 'cod', 'zz-old', 'ren']), repoAgents: ['codex-worker'], memberHandles: new Set(['flan', 'thom']) };
+  const p = { agentNames: new Set(['codex-worker', 'cod', 'zz-old', 'ren']), repoAgents: ['codex-worker'], liveAgents: NO_LIVE, memberHandles: new Set(['flan', 'thom']) };
   // Ambiguity is decided before permission, and for an admin too.
   for (const who of [member(), admin, member({ can_address_agents: false })]) {
     refused(() => checkWrite({ member: who, to: 'cod', body: 'x', ...p }), 'ambiguous_recipient');
@@ -118,7 +121,7 @@ test('policy: a DM to an agent name counts as that agent only if it is a live na
 // T13d item 4. Chatter counts the sender's own name among the candidates for any name it does not know exactly,
 // so a name that only the directory offers (a departed agent, an agent of another repo) is no exception.
 test('policy: a DM to a name that is not exactly on the roster and is the start of the sender\'s handle is refused', () => {
-  const p = { agentNames: new Set(['thom', 'tho']), repoAgents: ['tho'], memberHandles: new Set(['flan', 'thomas']) };
+  const p = { agentNames: new Set(['thom', 'tho']), repoAgents: ['tho'], liveAgents: NO_LIVE, memberHandles: new Set(['flan', 'thomas']) };
   for (const who of [member({ handle: 'thomas' }), member({ handle: 'thomas', can_address_agents: false }), { ...admin, handle: 'thomas' }]) {
     refused(() => checkWrite({ member: who, to: 'thom', body: 'x', ...p }), 'ambiguous_recipient');
   }
@@ -128,7 +131,7 @@ test('policy: a DM to a name that is not exactly on the roster and is the start 
 
 // T13c item 7. The predicate is that the agent's name begins with the handle, so the message says it that way.
 test('policy: a prefix refusal says the handle is the start of the name', () => {
-  const p = { agentNames: new Set(['codex-worker', 'grace-worker']), repoAgents: ['codex-worker', 'grace-worker'], memberHandles: new Set(['thom', 'grace', 'zed', 'zedd']) };
+  const p = { agentNames: new Set(['codex-worker', 'grace-worker']), repoAgents: ['codex-worker', 'grace-worker'], liveAgents: NO_LIVE, memberHandles: new Set(['thom', 'grace', 'zed', 'zedd']) };
   const message = (fn) => {
     try { fn(); } catch (e) { return e.message; }
     return assert.fail('expected a refusal');
@@ -150,6 +153,77 @@ test('policy: DM recipients and body limits', () => {
   refused(() => checkWrite({ member: member(), to: '#chat', body: 42, ...ctx }), 'bad_request');
   assert.equal(checkWrite({ member: member(), to: '#chat', body: 'x'.repeat(8000), ...ctx }).mode, 'post');
   assert.equal(checkWrite({ member: member(), to: '#chat', body: '  padded  ', ...ctx }).body, 'padded');
+});
+
+// T16 (F17). Chatter's `resolveRecipient` also counts the live named agents Herdr reports in the repo
+// (`teamAgents`), which the agents table need not hold. Here every live name of the session counts, as an
+// exact agent name and on the roster.
+const refusal = (fn) => {
+  try { fn(); } catch (e) { return e; }
+  return assert.fail('expected a refusal');
+};
+
+test('policy: a live agent only Herdr knows counts as an agent, by its exact name and by any start of it', () => {
+  const p = {
+    agentNames: new Set(['codex']), repoAgents: [], liveAgents: { names: ['zed-helper'], status: 'ok' },
+    memberHandles: new Set(['flan', 'thom', 'rex', 'zed']),
+  };
+  const off = member({ handle: 'rex', can_address_agents: false });
+  for (const body of ['@zed-h hi', '@zed hi', '@zed-helper hi', 'hi @ZED-HELPER']) {
+    refused(() => checkWrite({ member: off, to: '#chat', body, ...p }), 'agents_not_allowed');
+  }
+  // A start of the name is named in the refusal, as for an agent of the table.
+  assert.match(refusal(() => checkWrite({ member: off, to: '#chat', body: '@zed hi', ...p })).message, /^@zed is the start of the name of the Herdr agent zed-helper, /);
+  assert.match(refusal(() => checkWrite({ member: off, to: '#chat', body: '@zed-h hi', ...p })).message, /^@zed-h is the start of the name of the Herdr agent zed-helper, /);
+  // A DM to the member "zed" could be typed into zed-helper's terminal instead: refused for everyone.
+  for (const who of [off, member(), admin]) {
+    const e = refusal(() => checkWrite({ member: who, to: 'zed', body: 'x', ...p }));
+    assert.equal(e.code, 'ambiguous_recipient', who.handle);
+    assert.match(e.message, /zed-helper/);
+  }
+  // The exact live name is a DM to an agent.
+  const dm = checkWrite({ member: member(), to: 'zed-helper', body: 'x', ...p });
+  assert.equal(dm.toAgent, true);
+  assert.equal(dm.toMember, false);
+  refused(() => checkWrite({ member: off, to: 'zed-helper', body: 'x', ...p }), 'agents_not_allowed');
+  // Chatter refuses a DM to a bare prefix that is no member (it would need --queue and an exact name): as before.
+  refused(() => checkWrite({ member: member(), to: 'zed-h', body: 'x', ...p }), 'unknown_recipient');
+  // A permitted member may still mention zed, and Chatter will push it to zed-helper.
+  assert.deepEqual(checkWrite({ member: member(), to: '#chat', body: '@zed hi', ...p }).memberTargets, ['zed']);
+  // The same messages with no live agent: the live names are what decides.
+  const none = { ...p, liveAgents: NO_LIVE };
+  assert.equal(checkWrite({ member: off, to: '#chat', body: '@zed hi', ...none }).mode, 'post');
+  assert.equal(checkWrite({ member: off, to: 'zed', body: 'x', ...none }).toMember, true);
+});
+
+test('policy: when Herdr could not say which agents are live, a member who may not address agents may name no one', () => {
+  const p = {
+    agentNames: new Set(['codex']), repoAgents: ['codex'], liveAgents: { names: [], status: 'unknown' },
+    memberHandles: new Set(['flan', 'thom', 'grace', 'rex']),
+  };
+  const off = member({ handle: 'rex', can_address_agents: false });
+  for (const [to, body] of [['#chat', 'hey @grace'], ['#chat', 'hey @nobody'], ['grace', 'hello']]) {
+    const e = refusal(() => checkWrite({ member: off, to, body, ...p }));
+    assert.equal(e.code, 'agents_unverifiable', `${to} ${body}`);
+    assert.equal(e.status, 503);
+  }
+  // A plain post names no one.
+  assert.equal(checkWrite({ member: off, to: '#chat', body: 'hello all', ...p }).mode, 'post');
+  // What is known is still refused for what it is.
+  refused(() => checkWrite({ member: off, to: '#chat', body: 'hey @codex', ...p }), 'agents_not_allowed');
+  refused(() => checkWrite({ member: off, to: 'codex', body: 'x', ...p }), 'agents_not_allowed');
+  refused(() => checkWrite({ member: off, to: '#chat', body: '@everyone', ...p }), 'everyone_admin_only');
+  // Members who may address agents, and admins, are unaffected: Chatter, too, sees no live agent then.
+  for (const who of [member(), admin, { ...admin, can_address_agents: false }]) {
+    assert.equal(checkWrite({ member: who, to: '#chat', body: 'hey @grace', ...p }).mode, 'post', who.handle);
+    assert.equal(checkWrite({ member: who, to: 'grace', body: 'hello', ...p }).toMember, true, who.handle);
+  }
+});
+
+test('policy: checkWrite needs the live agents and whether Herdr could say', () => {
+  for (const liveAgents of [undefined, null, {}, { names: [] }, { status: 'ok' }, { names: [], status: 'maybe' }, { names: 'zed', status: 'ok' }]) {
+    assert.throws(() => checkWrite({ member: member(), to: '#chat', body: 'x', ...ctx, liveAgents }), TypeError, JSON.stringify(liveAgents));
+  }
 });
 
 test('rate limiter refills over time', () => {

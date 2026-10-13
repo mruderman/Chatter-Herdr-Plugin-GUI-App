@@ -10,8 +10,67 @@ import { Store } from '../src/store.js';
 export const CHATTER_JS = process.env.CHATTER_JS || '/home/claude/chatter/dist/bin/chatter.js';
 export const haveChatter = fs.existsSync(CHATTER_JS);
 
-/** A scratch Chatter universe plus a running bridge, all in a temp dir. */
-export async function makeEnv({ trustTailscale = false, whois, limits, pollMs = 50, staticDir, log } = {}) {
+// The stand-in for herdr. CommonJS, pinned by the package.json beside it, and run by this Node, not by
+// whatever `node` is first on PATH. It never opens a socket.
+const FAKE_HERDR = `#!${process.execPath}
+'use strict';
+// Answers \`agent list\` as agent-list.json says, exits 0 for every other command, and logs each call with
+// its parent's pid (the bridge's own runs have the test process as parent; Chatter's have Chatter) and the
+// Herdr variables it was given, which decide the socket it would reach.
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const env = {};
+for (const k of ['HERDR_SOCKET_PATH', 'HERDR_SESSION', 'HERDR_PANE_ID']) env[k] = process.env[k] ?? null;
+fs.appendFileSync(path.join(__dirname, 'calls.log'), JSON.stringify({ ppid: process.ppid, args, env }) + '\\n');
+if (args[0] === 'agent' && args[1] === 'list') {
+  const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'agent-list.json'), 'utf8'));
+  const answer = () => {
+    if (cfg.stdout) process.stdout.write(cfg.stdout);
+    if (cfg.stderr) process.stderr.write(cfg.stderr);
+    process.exitCode = cfg.code ?? 0;
+  };
+  if (cfg.hangMs && (!cfg.hangParent || cfg.hangParent === process.ppid)) setTimeout(answer, cfg.hangMs);
+  else answer();
+}
+`;
+
+/** What `herdr agent list` answers when these agents are live: Herdr's JSON shape (`result.agents`). */
+export const agentListJson = (agents) => JSON.stringify({ result: { agents } });
+
+/**
+ * A fake `herdr` executable in `dir`. `answer({ stdout, stderr, code, hangMs, hangParent })` sets what
+ * `agent list` answers (by default: no live agents); `calls()` is every call made so far, oldest first.
+ */
+export function makeFakeHerdr(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const bin = path.join(dir, 'herdr');
+  fs.writeFileSync(path.join(dir, 'package.json'), '{"type":"commonjs"}\n');
+  fs.writeFileSync(bin, FAKE_HERDR, { mode: 0o755 });
+  const log = path.join(dir, 'calls.log');
+  const answer = (cfg) => fs.writeFileSync(path.join(dir, 'agent-list.json'), JSON.stringify(cfg));
+  answer({ stdout: agentListJson([]) });
+  const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const isList = (c) => c.args[0] === 'agent' && c.args[1] === 'list';
+  return {
+    dir,
+    bin,
+    answer,
+    calls,
+    /** The `agent list` runs this process made itself (the bridge in a test runs in the test's process). */
+    ownListRuns: () => calls().filter((c) => c.ppid === process.pid && isList(c)),
+    /** The `agent list` runs made by someone else: the Chatter processes the bridge starts. */
+    otherListRuns: () => calls().filter((c) => c.ppid !== process.pid && isList(c)),
+    /** What was typed into an agent's terminal: Chatter's `herdr agent prompt <pane> <text>`. */
+    prompts: () => calls().filter((c) => c.args[0] === 'agent' && c.args[1] === 'prompt').map((c) => ({ pane: c.args[2], text: c.args[3] })),
+  };
+}
+
+/**
+ * A scratch Chatter universe plus a running bridge, all in a temp dir. Herdr is a path that does not exist,
+ * unless `fakeHerdr` is set: then it is a fake in the temp dir (`x.herdr`), for Chatter and the bridge alike.
+ */
+export async function makeEnv({ trustTailscale = false, whois, limits, pollMs = 50, staticDir, log, fakeHerdr = false, hostOptions = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-test-'));
   const state = path.join(root, 'chatter-state');
   const adminCfg = path.join(root, 'admin-cfg');
@@ -22,11 +81,12 @@ export async function makeEnv({ trustTailscale = false, whois, limits, pollMs = 
   git('init', '-q');
   git('commit', '--allow-empty', '-q', '-m', 'init');
 
-  const env = { ...process.env, HERDR_PLUGIN_STATE_DIR: state, HERDR_PLUGIN_CONFIG_DIR: adminCfg, HERDR_BIN_PATH: '/nonexistent-herdr' };
+  const herdr = fakeHerdr ? makeFakeHerdr(path.join(root, 'fake-herdr')) : null;
+  const env = { ...process.env, HERDR_PLUGIN_STATE_DIR: state, HERDR_PLUGIN_CONFIG_DIR: adminCfg, HERDR_BIN_PATH: herdr ? herdr.bin : '/nonexistent-herdr' };
   delete env.HERDR_PANE_ID;
   const host = new ChatterHost({
     cmd: [process.execPath, '--no-warnings', CHATTER_JS],
-    memberConfigRoot: path.join(root, 'members'), adminConfigDir: adminCfg, stateDir: state, env, log,
+    memberConfigRoot: path.join(root, 'members'), adminConfigDir: adminCfg, stateDir: state, env, log, ...hostOptions,
   });
   const store = new Store(path.join(root, 'bridge.db'));
   store.addMember({ handle: 'flan', kind: 'human', role: 'admin', tailscale_login: 'flan@example.com' });
@@ -65,7 +125,7 @@ export async function makeEnv({ trustTailscale = false, whois, limits, pollMs = 
   };
 
   return {
-    root, repo, repoInfo, key, base, store, host, app, tokens, addMember, api, post, messages, count, seedAgent,
+    root, repo, repoInfo, key, base, store, host, app, tokens, addMember, api, post, messages, count, seedAgent, herdr,
     async stop() { await app.close(); host.close(); store.close(); fs.rmSync(root, { recursive: true, force: true }); },
   };
 }
