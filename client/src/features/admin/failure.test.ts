@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError, ProtocolError } from '../../api/errors';
 import { MAYBE_DONE, UNEXPECTED_FAILURE, describeChangeFailure } from './failure';
 
-// What an admin is told when an add, an edit, a revoke or a rotation failed. The bridge commits a change
-// before it writes the audit entry (bridge/src/server.js), so an audit insert that fails answers 500
-// after the member exists or the old token is dead; and whatever sits in front of the bridge may answer
-// with a page of its own after it forwarded the request. Only a refusal that the bridge itself makes
+// What an admin is told when an add, an edit, a revoke or a rotation failed. The bridge makes a change and
+// its audit entry one transaction (bridge/src/server.js), so its own 500 means that nothing changed; but
+// whatever sits in front of the bridge may answer with a page of its own, or a 5xx, after it forwarded the
+// request, and a lost answer says nothing at all. Only a refusal that the bridge itself makes
 // proves that nothing changed. The hint is a sentence of its own: the message before it ends with a
 // full stop, so that on screen and read aloud the two do not run together.
 describe('describeChangeFailure', () => {

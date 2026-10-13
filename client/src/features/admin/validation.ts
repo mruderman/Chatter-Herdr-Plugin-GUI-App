@@ -33,8 +33,8 @@ export interface MemberFormValues {
   tailscaleLogin: string;
 }
 
-// An empty login field means "no login". The bridge stores whatever it is sent, so an empty string
-// would be kept as a login of its own (observed: the second member with one is refused with a 500).
+// An empty login field means "no login", sent as null. The bridge reads an empty string as none as well,
+// but a field that is empty should say so in the request, not rely on that.
 function loginOrNull(value: string): string | null {
   const login = value.trim();
   return login === '' ? null : login;

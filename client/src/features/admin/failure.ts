@@ -7,9 +7,10 @@ export const UNEXPECTED_FAILURE = 'Something went wrong.';
 // A change whose answer never arrived (or arrived unreadable) may still have happened, and a token
 // that was issued in that answer is then lost for good, so the admin is sent to look.
 export const MAYBE_DONE = 'Check the members list to see whether it went through.';
-// From here up a status proves nothing: the bridge answers 500 for anything it did not foresee, and it
-// writes the audit entry after it has committed the change (bridge/src/server.js), so a failing audit
-// insert answers 500 once the member exists or the old token is dead.
+// From here up a status proves nothing: the bridge answers 500 for anything it did not foresee. It makes
+// each change and its audit entry one transaction (bridge/src/server.js), so its own 500 means that nothing
+// changed, but a 5xx can also come from whatever sits in front of it, after the request was forwarded, and
+// the admin cannot tell which sent it.
 const FIRST_SERVER_ERROR = 500;
 
 export function describeFailure(error: unknown): string {

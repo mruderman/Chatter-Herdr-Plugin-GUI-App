@@ -660,8 +660,8 @@ describe('Admin view: edit member', () => {
       await user.click(screen.getByRole('button', { name: 'Add' }));
     };
     await add();
-    // The database refused before anything was written, but a 500 cannot say so: the bridge also answers it
-    // when only the audit entry of a change that was made fails, so the hint stays, and so does the reload.
+    // The database refused before anything was written, but a 500 cannot say so here: a proxy's 5xx can follow a
+    // change that was made, so the hint stays, and so does the reload.
     expect((await screen.findByRole('alert')).textContent).toBe(`internal error. ${MAYBE_DONE}`);
     expect(refreshDirectory).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -984,8 +984,8 @@ describe('Admin view: rotate token', () => {
   });
 
   it('says that a rotation answered with a server error may have gone through, since the bridge makes it before it audits it, and reloads the lists', async () => {
-    // bridge/src/server.js kills the old token and issues the new one before it writes the audit entry, so
-    // an audit insert that fails answers 500 with the old token already dead and the new one lost.
+    // The answer is lost or comes from a proxy after the old token was killed and the new one issued, so the
+    // old token is dead and the new one lost. (The bridge itself rolls back when its audit entry fails.)
     const bridge = new StubBridge();
     bridge.failNext('rotateToken', new ApiError(500, ERROR_CODES.internal, 'internal error'));
     const { user, refreshDirectory } = renderAdmin(bridge);
@@ -1095,8 +1095,8 @@ describe('Admin view: after a change', () => {
     expect(bridge.callsTo('audit')).toHaveLength(1);
   });
 
-  // The bridge commits a change before it writes the audit entry, so a failure that is not its own refusal
-  // (a 500, a lost answer, a proxy's page) can follow a change that was made. The message then sends the
+  // A failure that is not the bridge's own refusal (a 5xx or a page from a proxy, a lost answer) can follow
+  // a change that was made. The message then sends the
   // admin to the members list, so the page must not go on showing the lists as they were before the attempt,
   // nor the composer the directory as it was. Nothing else changes: the dialog stays, with its alert.
   it.each(CHANGES)('reloads both lists and asks for the directory once when %s fails with a 500, and announces nothing', async (_name, change) => {
@@ -1133,7 +1133,7 @@ describe('Admin view: after a change', () => {
   });
 
   it('shows in the reloaded table a member whose add was made but answered 500, and keeps the dialog, its alert and what was typed', async () => {
-    // What the bridge does when only the audit entry that follows the add fails: the member exists.
+    // An answer that fails after the add was made (a proxy's 5xx, say): the member exists.
     const bridge = new StubBridge();
     const add = bridge.addMember.bind(bridge);
     bridge.addMember = async (request) => {
