@@ -173,6 +173,9 @@ export function connectStream(options: StreamOptions): StreamHandle {
   }
 
   async function attempt(): Promise<void> {
+    // A status callback may have closed the handle just before this call, and close() can only stop an
+    // attempt that is already running: this one has not set `stopCurrent` yet.
+    if (finished) return;
     const controller = new AbortController();
     // A holder, not `let`s: closures set these, and narrowing would not see them do so.
     const run: { outcome: Outcome | null; cancelSilence: (() => void) | null } = { outcome: null, cancelSilence: null };
@@ -296,6 +299,9 @@ export function connectStream(options: StreamOptions): StreamHandle {
         const delayMs = Math.floor(random() * ceiling);
         failures += 1;
         emit({ state: 'reconnecting', attempt: failures, delayMs, cause: outcome.cause, byeReason: outcome.byeReason, error: outcome.error });
+        // The store closes a stream from this very callback when a subscriber signs out or disposes it
+        // while handling the Offline publication; finish() has then run and found no retry to cancel.
+        if (finished) return;
         cancelRetry = clock.schedule(() => {
           cancelRetry = null;
           void attempt();
@@ -309,6 +315,8 @@ export function connectStream(options: StreamOptions): StreamHandle {
   queueMicrotask(() => {
     if (finished) return;
     emit({ state: 'connecting' });
+    // Same as after `reconnecting`: the callback may have closed the handle.
+    if (finished) return;
     void attempt();
   });
 

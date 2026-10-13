@@ -53,7 +53,11 @@ export class ReadingPosition {
   private pinned = true;
   private firstId: number | undefined;
   private lastId: number | undefined;
-  /** The newest id markRead was last called for in this conversation, so repeats send nothing. */
+  /**
+   * The newest id markRead was last called for in this conversation, so repeats send nothing. It is set
+   * before the call and kept when the call fails: a failed acknowledgement is the store's to retry
+   * (state/store.ts), so the feed never has to send the same id again.
+   */
   private markedId: number | undefined;
   private anchor: Anchor | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;

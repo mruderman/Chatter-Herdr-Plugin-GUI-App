@@ -17,6 +17,26 @@ describe('describeChangeFailure', () => {
     expect(describeChangeFailure(error)).toBe(`${said} ${MAYBE_DONE}`);
   });
 
+  // The API client builds an ApiError from any JSON body shaped like the bridge's, so a proxy that
+  // answers in that shape arrives with a status below 500 and a code the bridge never sends. It is not
+  // the bridge's word that nothing happened: the proxy may have forwarded the request first.
+  it.each<[string, ApiError, string]>([
+    ['a 408 with a code of a proxy\'s own', new ApiError(408, 'upstream_timeout', 'the upstream did not answer in time'), 'the upstream did not answer in time.'],
+    ['a 407 with a code of a proxy\'s own', new ApiError(407, 'proxy_auth_required', 'the proxy wants credentials'), 'the proxy wants credentials.'],
+  ])('ends with the hint to check the members list after %s', (_what, error, said) => {
+    expect(describeChangeFailure(error)).toBe(`${said} ${MAYBE_DONE}`);
+  });
+
+  // `internal` is the one code the bridge sends with a status that proves nothing (500); the others are
+  // refusals at whatever status below 500 they arrive. One status for all, so that a code is judged on
+  // being the bridge's and not on the status it happens to travel with.
+  it.each(Object.values(ERROR_CODES).filter((code) => code !== ERROR_CODES.internal))(
+    'says only what the bridge said after its own %s code at a status below 500',
+    (code) => {
+      expect(describeChangeFailure(new ApiError(400, code, 'the bridge\'s message'))).toBe('the bridge\'s message');
+    },
+  );
+
   it.each<[string, unknown, string]>([
     ['an answer that was lost on the way', new NetworkError('the connection to the bridge broke during an answer'), 'the connection to the bridge broke during an answer.'],
     ['an answer in a shape this page does not know', new ProtocolError('token', 'is not a string'), 'The bridge answered in a way this page does not understand (token is not a string).'],

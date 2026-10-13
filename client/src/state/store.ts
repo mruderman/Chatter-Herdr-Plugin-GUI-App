@@ -47,6 +47,22 @@ const BACKGROUND_REPOS = 8;
 const SEND_WAIT_MS = 1_000;
 const DIRECTORY_EVERY_MS = 5 * 60_000;
 const UNKNOWN_HANDLE_EVERY_MS = 60_000;
+/**
+ * How often a read acknowledgement that failed in transit is said again, after retryDelay: 1, 2, 4, 8,
+ * 16, 30, 30 and 30 seconds, two minutes in all. That outlasts a dropped connection or a restarting
+ * bridge, which is what a transient failure is, and a bridge that stays away longer is the connection
+ * badge's business: the next trigger the feed has (a new message, another visit) acknowledges again.
+ */
+const READ_RETRIES = 8;
+
+/** A read acknowledgement that failed in transit and waits to be said again. */
+interface ReadRetry {
+  readonly sync: RepoSync;
+  /** The id of the failed call, never the newest message by now: the retry must not read what arrived since. */
+  readonly id: number;
+  retries: number;
+  cancel: () => void;
+}
 
 /** Reports without interrupting the caller; rethrown on its own microtask where reportError is missing, as stream.ts does. */
 function reportLater(error: unknown): void {
@@ -114,9 +130,21 @@ class Live {
   runningRefresh: Promise<void> | null = null;
   queuedRefresh: Promise<void> | null = null;
   readonly unknownAt = new Map<string, number>();
+  /** One per repo, because the read pointer is: a failure in another repo must not take its place. */
+  readonly readRetries = new Map<string, ReadRetry>();
+  private readonly replacements = new Map<string, number>();
   private readonly timers = new Set<() => void>();
 
   constructor(readonly me: Me, private readonly clock: Clock) {}
+
+  /** How often the repo's database was replaced, so a request can tell that it was while the request was out. */
+  replacedCount(key: string): number {
+    return this.replacements.get(key) ?? 0;
+  }
+
+  noteReplaced(key: string): void {
+    this.replacements.set(key, this.replacedCount(key) + 1);
+  }
 
   schedule(callback: () => void, ms: number): () => void {
     const cancel = this.clock.schedule(() => {
@@ -135,6 +163,8 @@ class Live {
     this.abort.abort();
     for (const cancel of this.timers) cancel();
     this.timers.clear();
+    // The timers are gone; an acknowledgement still in flight finds its entry missing and schedules nothing.
+    this.readRetries.clear();
     for (const repo of this.repos.values()) repo.stop();
   }
 }
@@ -430,6 +460,11 @@ export function createStore(options: StoreOptions = {}): Store {
   }
 
   async function refetchRepos(current: Live, sync: RepoSync): Promise<void> {
+    // Called when the repo's database was replaced: an id from the old one, said again, would be clamped
+    // to the new database's highest and mark all of it read. Before the await, so no timer can fire first.
+    current.noteReplaced(sync.key);
+    const unsaid = current.readRetries.get(sync.key);
+    if (unsaid) dropRetry(current, unsaid);
     try {
       const { repos } = await api.repos({ signal: current.abort.signal });
       if (live !== current || current.revoked) return;
@@ -590,13 +625,64 @@ export function createStore(options: StoreOptions = {}): Store {
     const newest = repo.messages.findLast((message) => belongsTo(message, id));
     // The pointer only moves forward, so there is nothing to say when it is already past.
     if (!newest || newest.id <= repo.readPointer) return;
+    const replaced = current.replacedCount(repo.key);
+    const failedInTransit = await acknowledge(current, repo, newest.id);
+    // Not when the database was replaced while the request was out: its id means nothing in the new one.
+    if (failedInTransit && current.replacedCount(repo.key) === replaced) retryRead(current, repo, newest.id);
+  }
+
+  /** Says once that `id` was read. True when it failed in transit, which another try may get past. */
+  async function acknowledge(current: Live, repo: RepoSync, id: number): Promise<boolean> {
     try {
-      const result = await api.markRead(repo.key, newest.id, { signal: current.abort.signal });
+      const result = await api.markRead(repo.key, id, { signal: current.abort.signal });
       if (live === current) repo.readPointer = Math.max(repo.readPointer, result.last_read_id);
+      return false;
     } catch (failure) {
       const read = classify(failure, current.abort.signal);
       if (read.kind === 'bug') report(read.error);
+      // A refusal comes back the same, and dead credentials are the streams' to report.
+      return read.kind === 'transient';
     }
+  }
+
+  // The feed marks an id as acknowledged before the answer is in and asks again only for a newer one, so
+  // a failure nobody retries leaves the bridge's pointer behind (and a reload shows read messages as new).
+  function retryRead(current: Live, sync: RepoSync, id: number): void {
+    if (live !== current || disposed || current.revoked) return;
+    const pending = current.readRetries.get(sync.key);
+    // Both were read, and the larger id says so for the smaller one too: the pointer is one per repo.
+    if (pending && pending.id >= id) return;
+    pending?.cancel();
+    const entry: ReadRetry = { sync, id, retries: 0, cancel: () => undefined };
+    current.readRetries.set(sync.key, entry);
+    waitToResend(current, entry);
+  }
+
+  function waitToResend(current: Live, entry: ReadRetry): void {
+    entry.cancel = current.schedule(() => {
+      void resend(current, entry);
+    }, retryDelay(entry.retries));
+  }
+
+  async function resend(current: Live, entry: ReadRetry): Promise<void> {
+    const { sync, id } = entry;
+    // The repo may have been left (a ninth one is followed only while selected) or the pointer moved on.
+    if (live !== current || disposed || current.revoked || current.repos.get(sync.key) !== sync || sync.readPointer >= id) {
+      dropRetry(current, entry);
+      return;
+    }
+    entry.retries += 1;
+    const again = await acknowledge(current, sync, id);
+    // A newer failure took its place meanwhile, or the session ended and cleared it.
+    if (current.readRetries.get(sync.key) !== entry) return;
+    if (again && entry.retries < READ_RETRIES) waitToResend(current, entry);
+    else dropRetry(current, entry);
+  }
+
+  function dropRetry(current: Live, entry: ReadRetry): void {
+    if (current.readRetries.get(entry.sync.key) !== entry) return;
+    entry.cancel();
+    current.readRetries.delete(entry.sync.key);
   }
 
   ask(0);

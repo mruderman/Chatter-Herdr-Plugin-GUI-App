@@ -1,7 +1,7 @@
 // How a failed call is put to the admin. Only the three error classes of src/api are read, and only
 // their messages: those never hold a token or a request body. Anything else is not echoed, because
 // an unknown error object could carry whatever its thrower put in it.
-import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError, ProtocolError } from '../../api/errors';
+import { ApiError, ERROR_CODES, NetworkError, ProtocolError } from '../../api/errors';
 
 export const UNEXPECTED_FAILURE = 'Something went wrong.';
 // A change whose answer never arrived (or arrived unreadable) may still have happened, and a token
@@ -18,13 +18,17 @@ export function describeFailure(error: unknown): string {
   return UNEXPECTED_FAILURE;
 }
 
+// The API client builds an ApiError from any JSON body shaped like the bridge's error, so the code is
+// what tells the bridge's own answer from a proxy's: a 408 `upstream_timeout` is not in this set.
+const BRIDGE_CODES: ReadonlySet<string> = new Set<string>(Object.values(ERROR_CODES));
+
 /**
  * Only a refusal the bridge itself makes is its word that nothing happened: a status below 500 with one
- * of its own codes. An answer that is not its error shape (a proxy's 502, or any other page) carries the
- * client's `unexpected_status`, and the proxy may have forwarded the request before it failed.
+ * of its own codes. Anything else may have been forwarded before it failed: a proxy's page carries the
+ * client's `unexpected_status`, and a proxy's JSON error carries a code the bridge never sends.
  */
 export function isRefusal(error: unknown): boolean {
-  return error instanceof ApiError && error.status < FIRST_SERVER_ERROR && error.code !== CLIENT_ERROR_CODES.unexpectedStatus;
+  return error instanceof ApiError && error.status < FIRST_SERVER_ERROR && BRIDGE_CODES.has(error.code);
 }
 
 // The hint after a message is a sentence of its own, so the message must end with one of these marks,

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { body, recordedError } from '../../test/fixtures/recorded';
 import type { Api } from '../api/client';
 import { ManualClock } from '../api/clock';
-import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError } from '../api/errors';
+import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError, ProtocolError } from '../api/errors';
 import { parseDirectory, parseMessagesPage } from '../api/guards';
 import { QUERY, ROUTES } from '../api/routes';
 import type { StreamTiming } from '../api/stream';
@@ -610,6 +610,235 @@ describe('paging, the marker and the read pointer', () => {
   });
 });
 
+// The feed asks for an acknowledgement once per newest message and then marks the id as done, so a
+// failure the store swallowed would leave the bridge's pointer behind until a newer message arrives
+// (and a reload would show read messages as new). The store owns the request, the session and the
+// monotonic pointer, so it says the same id again, on the session's timers, for a bounded time.
+describe('a read acknowledgement that failed', () => {
+  type Harness = Awaited<ReturnType<typeof harness>>;
+  const upTo = (h: Harness, repo = MAIN_REPO): Array<number | undefined> =>
+    h.bridge.requests.filter((r) => r.route === BRIDGE_ROUTES.read && r.repo === repo).map((r) => r.upToId);
+  /** The timers within a minute: with healthy, quiet streams nothing else the store keeps is due that soon. */
+  const soon = (h: Harness): number[] => h.clock.delays.filter((delay) => delay <= 60_000);
+  const READ_FAILS = new NetworkError('could not reach the bridge');
+  /** mira reads #chat up to 14 from a pointer of 0, so every acknowledgement here has something to say. */
+  const reader = (options: HarnessOptions = {}) => harness({ as: 'mira', lastReadId: 0, ...options });
+
+  it.each<[string, unknown]>([
+    ['a connection that broke', READ_FAILS],
+    ['a 500', new ApiError(500, ERROR_CODES.internal, 'internal error')],
+    ['a proxy\'s 502', new ApiError(502, CLIENT_ERROR_CODES.unexpectedStatus, 'the bridge answered HTTP 502')],
+    ['a 429', new ApiError(429, ERROR_CODES.rateLimited, 'limit is 30 messages per minute')],
+    ['an answer in the wrong shape', new ProtocolError('last_read_id', 'is not a number')],
+  ])('is said again after a second with the same id after %s, and the pointer then moves', async (_what, failure) => {
+    const h = await reader();
+    h.bridge.failNext(BRIDGE_ROUTES.read, failure);
+    const before = h.clock.scheduled;
+    await h.store.markRead();
+    expect(upTo(h)).toEqual([14]);
+    expect(h.bridge.readPointer('mira')).toBe(0);
+    expect(h.clock.scheduled).toBe(before + 1);
+    expect(soon(h)).toEqual([1_000]);
+    await h.advance(999);
+    expect(upTo(h)).toEqual([14]);
+    await h.advance(1);
+    expect(upTo(h)).toEqual([14, 14]);
+    expect(h.bridge.readPointer('mira')).toBe(14);
+    // The store's own pointer moved too: there is nothing left to say, now or later.
+    await h.store.markRead();
+    await h.advance(TEN_MINUTES);
+    expect(upTo(h)).toEqual([14, 14]);
+    expect(h.clock.scheduled).toBe(before);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('says the id that failed, not the newest one, when newer messages arrived in the meantime', async () => {
+    const h = await reader();
+    h.bridge.failNext(BRIDGE_ROUTES.read, READ_FAILS);
+    await h.store.markRead();
+    const later = h.bridge.write({ from: 'thom', body: 'arrived while the retry waited' });
+    await settle();
+    expect(h.now().messages.at(-1)?.id).toBe(later.id);
+    expect(later.id).toBeGreaterThan(14);
+    expect(soon(h)).toEqual([1_000]);
+    await h.advance(1_000);
+    expect(upTo(h)).toEqual([14, 14]);
+    expect(h.bridge.readPointer('mira')).toBe(14);
+  });
+
+  it('stops once the pointer has passed it, without saying it again', async () => {
+    const h = await reader();
+    h.bridge.failNext(BRIDGE_ROUTES.read, READ_FAILS);
+    await h.store.markRead();
+    const later = h.bridge.write({ from: 'thom', body: 'read before the retry was due' });
+    await settle();
+    expect(soon(h)).toEqual([1_000]);
+    await h.store.markRead();
+    expect(upTo(h)).toEqual([14, later.id]);
+    expect(h.bridge.readPointer('mira')).toBe(later.id);
+    await h.advance(TEN_MINUTES);
+    expect(upTo(h)).toEqual([14, later.id]);
+    expect(soon(h)).toEqual([]);
+  });
+
+  // `quiet`: nothing at all is asked afterwards. A new sign-in starts a session of its own, which does.
+  it.each<[string, boolean, (h: Harness) => Promise<void> | void]>([
+    ['sign-out', true, (h) => h.store.signOut()],
+    ['dispose', true, (h) => h.store.dispose()],
+    ['revocation', true, async (h) => {
+      h.bridge.revoke('mira');
+      await settle();
+    }],
+    ['a new sign-in', false, async (h) => {
+      await h.store.signIn(h.bridge.tokenOf('mira'));
+      await settle();
+    }],
+  ])('is dropped with the session at %s: its timer goes and nothing is said afterwards', async (_what, quiet, end) => {
+    const h = await reader();
+    h.bridge.failNext(BRIDGE_ROUTES.read, READ_FAILS);
+    await h.store.markRead();
+    expect(soon(h)).toEqual([1_000]);
+    await end(h);
+    expect(soon(h)).toEqual([]);
+    const asked = h.bridge.requests.length;
+    await h.advance(TEN_MINUTES);
+    expect(upTo(h)).toEqual([14]);
+    if (quiet) expect(h.bridge.requests.length).toBe(asked);
+  });
+
+  it.each<[string, unknown]>([
+    ['a 403', new ApiError(403, ERROR_CODES.adminOnly, 'admin only')],
+    ['a 404', new ApiError(404, ERROR_CODES.noSuchRepo, 'no repo "x"')],
+    ['a 401', new ApiError(401, ERROR_CODES.badToken, 'token is invalid or revoked')],
+    ['a 400', new ApiError(400, ERROR_CODES.badRequest, 'up_to_id must be a non-negative integer')],
+    ['a bug', new Error('a bug in the client')],
+  ])('is not said again after %s, which the same request would meet again', async (_what, failure) => {
+    const h = await reader();
+    h.bridge.failNext(BRIDGE_ROUTES.read, failure);
+    const before = h.clock.scheduled;
+    await h.store.markRead();
+    // The request was made and refused; only then does "no retry" mean something.
+    expect(upTo(h)).toEqual([14]);
+    expect(h.clock.scheduled).toBe(before);
+    await h.advance(TEN_MINUTES);
+    expect(upTo(h)).toEqual([14]);
+    // A bug is reported, a refusal is not; neither ends the session.
+    expect(h.errors).toEqual(failure instanceof ApiError ? [] : [failure]);
+    expect(h.now().session.status).toBe('signed-in');
+  });
+
+  it('keeps at most one retry pending per repo: a failure while one waits keeps the larger id', async () => {
+    const h = await reader();
+    h.bridge.failNext(BRIDGE_ROUTES.read, READ_FAILS, READ_FAILS, READ_FAILS);
+    const before = h.clock.scheduled;
+    await h.store.markRead();
+    expect(h.clock.scheduled).toBe(before + 1);
+    // The same id once more (another trigger), failing again: still the one retry.
+    await h.store.markRead();
+    expect(upTo(h)).toEqual([14, 14]);
+    expect(h.clock.scheduled).toBe(before + 1);
+    // A newer message, read and failing: the one retry now carries it, from a fresh start.
+    await h.advance(500);
+    const later = h.bridge.write({ from: 'thom', body: 'read, and not acknowledged either' });
+    await settle();
+    await h.store.markRead();
+    expect(upTo(h)).toEqual([14, 14, later.id]);
+    expect(h.clock.scheduled).toBe(before + 1);
+    expect(soon(h)).toEqual([1_000]);
+    await h.advance(1_000);
+    expect(upTo(h)).toEqual([14, 14, later.id, later.id]);
+    expect(h.bridge.readPointer('mira')).toBe(later.id);
+    expect(h.clock.scheduled).toBe(before);
+  });
+
+  it('keeps the larger id when a failure for a smaller one comes while a retry waits, since the pointer is one per repo', async () => {
+    const h = await reader();
+    h.bridge.failNext(BRIDGE_ROUTES.read, READ_FAILS, READ_FAILS);
+    const before = h.clock.scheduled;
+    await h.store.markRead();
+    h.open('DM with thom');
+    const direct = h.now().messages.at(-1)?.id ?? 0;
+    expect(direct).toBeGreaterThan(0);
+    expect(direct).toBeLessThan(14);
+    await h.store.markRead();
+    expect(upTo(h)).toEqual([14, direct]);
+    expect(h.clock.scheduled).toBe(before + 1);
+    await h.advance(1_000);
+    expect(upTo(h)).toEqual([14, direct, 14]);
+    expect(h.bridge.readPointer('mira')).toBe(14);
+  });
+
+  it('keeps one pending per repo, so a failure in another repo does not take the first one\'s place', async () => {
+    const h = await harness({ as: 'thom', lastReadId: 0 });
+    h.bridge.failNext(BRIDGE_ROUTES.read, READ_FAILS, READ_FAILS);
+    const before = h.clock.scheduled;
+    await h.store.markRead();
+    const mainId = h.now().messages.at(-1)?.id;
+    h.store.selectRepo(SITE_REPO);
+    const siteId = h.now().messages.at(-1)?.id;
+    await h.store.markRead();
+    expect(mainId).toBeDefined();
+    expect(siteId).toBeDefined();
+    expect(upTo(h, MAIN_REPO)).toEqual([mainId]);
+    expect(upTo(h, SITE_REPO)).toEqual([siteId]);
+    expect(h.clock.scheduled).toBe(before + 2);
+    await h.advance(1_000);
+    expect(upTo(h, MAIN_REPO)).toEqual([mainId, mainId]);
+    expect(upTo(h, SITE_REPO)).toEqual([siteId, siteId]);
+    expect(h.bridge.readPointer('thom', MAIN_REPO)).toBe(mainId);
+    expect(h.bridge.readPointer('thom', SITE_REPO)).toBe(siteId);
+    expect(h.clock.scheduled).toBe(before);
+  });
+
+  it('is bounded: eight more tries after 1, 2, 4, 8, 16, 30, 30 and 30 seconds, then it is left', async () => {
+    const h = await reader();
+    h.bridge.failNext(BRIDGE_ROUTES.read, ...Array.from({ length: 50 }, () => READ_FAILS));
+    const before = h.clock.scheduled;
+    await h.store.markRead();
+    const waits: number[] = [];
+    for (let next = soon(h)[0]; next !== undefined; next = soon(h)[0]) {
+      waits.push(next);
+      await h.advance(next);
+    }
+    expect(waits).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+    expect(upTo(h)).toEqual(Array.from({ length: 9 }, () => 14));
+    expect(h.clock.scheduled).toBe(before);
+    await h.advance(TEN_MINUTES);
+    expect(upTo(h)).toHaveLength(9);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('is dropped when the repo\'s epoch changes: the old id would read the new database', async () => {
+    const h = await reader();
+    h.bridge.failNext(BRIDGE_ROUTES.read, READ_FAILS);
+    await h.store.markRead();
+    expect(soon(h)).toEqual([1_000]);
+    h.bridge.purge();
+    await settle();
+    expect(soon(h)).toEqual([]);
+    await h.advance(TEN_MINUTES);
+    expect(upTo(h)).toEqual([14]);
+  });
+
+  it('is not armed by an acknowledgement that was in flight when the epoch changed, and failed after it', async () => {
+    const h = await reader();
+    h.bridge.hold(BRIDGE_ROUTES.read);
+    h.bridge.failNext(BRIDGE_ROUTES.read, READ_FAILS);
+    const asking = h.store.markRead();
+    await settle();
+    // The request is out, held on its way to the bridge.
+    expect(upTo(h)).toEqual([14]);
+    h.bridge.purge();
+    await settle();
+    h.bridge.release(BRIDGE_ROUTES.read);
+    await asking;
+    await settle();
+    expect(soon(h)).toEqual([]);
+    await h.advance(TEN_MINUTES);
+    expect(upTo(h)).toEqual([14]);
+  });
+});
+
 describe('the directory', () => {
   it('is fetched on sign-in, for an unknown sender at most once a minute per handle, and every 5 minutes', async () => {
     const h = await harness();
@@ -876,6 +1105,28 @@ describe('robustness', () => {
     } finally {
       process.off('unhandledRejection', onRejection);
     }
+  });
+
+  it('a subscriber that disposes the store while handling the first Offline publication leaves no request or timer behind', async () => {
+    const h = await harness();
+    expect(h.now().connection).toBe('online');
+    let offline = 0;
+    h.store.subscribe((snapshot) => {
+      if (snapshot.connection !== 'offline') return;
+      offline += 1;
+      h.store.dispose();
+    });
+    const asked = h.bridge.requests.length;
+    h.bridge.cut();
+    await settle();
+    // Without this the test would pass on a store that never got as far as publishing Offline.
+    expect(offline).toBe(1);
+    h.bridge.restore();
+    await h.advance(TEN_MINUTES);
+    expect(h.bridge.requests.length).toBe(asked);
+    expect(h.bridge.openStreams()).toBe(0);
+    expect(h.clock.scheduled).toBe(0);
+    expect(h.errors).toEqual([]);
   });
 
   it('after dispose, nothing runs: no snapshot, no request, no timer', async () => {

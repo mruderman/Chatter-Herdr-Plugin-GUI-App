@@ -435,6 +435,46 @@ describe('connectStream: closing', () => {
     expect(s.states()).toEqual(['closed']);
   });
 
+  // The store closes a stream from the status callback itself: a subscriber that signs out or disposes
+  // while handling the Offline publication closes the handle inside the `reconnecting` callback. What
+  // follows the callback in connectStream must then see that the handle is closed.
+  it('close() inside the connecting callback means no request, and nothing is left waiting', async () => {
+    const bridge = new FakeBridge();
+    const seen: string[] = [];
+    let close = (): void => undefined;
+    const s = start(bridge, {
+      onStatus: (status) => {
+        seen.push(status.state);
+        if (status.state === 'connecting') close();
+      },
+    });
+    close = () => s.handle.close();
+    await settle();
+    expect(seen).toEqual(['connecting', 'closed']);
+    expect(bridge.requests).toHaveLength(0);
+    expect(s.clock.scheduled).toBe(0);
+  });
+
+  it('close() inside the reconnecting callback schedules no retry and makes no request', async () => {
+    const bridge = new FakeBridge();
+    bridge.refuse(new NetworkError('down'));
+    const seen: string[] = [];
+    let close = (): void => undefined;
+    const s = start(bridge, {
+      onStatus: (status) => {
+        seen.push(status.state);
+        if (status.state === 'reconnecting') close();
+      },
+    });
+    close = () => s.handle.close();
+    await settle();
+    expect(seen).toEqual(['connecting', 'reconnecting', 'closed']);
+    expect(s.clock.scheduled).toBe(0);
+    s.clock.advance(10 * 60_000);
+    await settle();
+    expect(bridge.requests).toHaveLength(1);
+  });
+
   it('close() from inside onMessage stops delivery at once', async () => {
     const bridge = new FakeBridge();
     const seen: number[] = [];
