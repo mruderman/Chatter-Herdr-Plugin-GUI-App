@@ -16,6 +16,8 @@ const EXPECTED_COLUMNS = {
 };
 
 const KEY_RE = /^[A-Za-z0-9._-]+$/;
+// What every caller of the repo listing is told when Chatter fails, /healthz's unauthenticated one included.
+const REPOS_FAILED = 'Chatter could not list the repositories';
 
 export class ChatterHost {
   /**
@@ -24,8 +26,9 @@ export class ChatterHost {
    * @param {string} o.memberConfigRoot   per-member Chatter config dirs live here
    * @param {string|null} [o.adminConfigDir]  Chatter config dir of the human admin (default: Chatter's own)
    * @param {string|null} [o.stateDir]    HERDR_PLUGIN_STATE_DIR passthrough
+   * @param {(line: string) => void} [o.log]  the operator's log, for what Chatter printed when it failed
    */
-  constructor({ cmd, memberConfigRoot, adminConfigDir = null, stateDir = null, timeoutMs = 15_000, env = process.env }) {
+  constructor({ cmd, memberConfigRoot, adminConfigDir = null, stateDir = null, timeoutMs = 15_000, env = process.env, log = () => {} }) {
     if (!cmd?.length) throw new Error('ChatterHost needs a command');
     this.cmd = cmd;
     this.memberConfigRoot = memberConfigRoot;
@@ -33,6 +36,7 @@ export class ChatterHost {
     this.stateDir = stateDir;
     this.timeoutMs = timeoutMs;
     this.env = env;
+    this.log = log;
     this._repos = null;
     this._reposAt = 0;
     this._reposInflight = null;
@@ -98,7 +102,11 @@ export class ChatterHost {
     if (this._reposInflight) return this._reposInflight;
     this._reposInflight = (async () => {
       const r = await this.run({ admin: true, cwd: os.homedir(), args: ['data', '--json'] });
-      if (r.code !== 0) throw new HttpError(502, 'chatter_error', `chatter data failed: ${r.stderr.trim() || r.code}`);
+      if (r.code !== 0) {
+        // Chatter's stderr can name host paths (the node binary, its script, a stack): it is the operator's.
+        this.log(`chatter data failed (exit ${r.code}): ${r.stderr.trim()}`);
+        throw new HttpError(502, 'chatter_error', REPOS_FAILED);
+      }
       const rows = JSON.parse(r.stdout || '[]');
       this._repos = rows.map((x) => ({
         key: x.key,

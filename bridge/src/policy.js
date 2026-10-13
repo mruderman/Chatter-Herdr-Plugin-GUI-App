@@ -65,12 +65,15 @@ export function checkWrite({ member, to, body, agentNames, repoAgents, memberHan
     const advice = toAgent ? `"${to}" is not a live agent of this repo.` : 'An admin can rename the member or the agent.';
     throw new HttpError(409, AMBIGUOUS_RECIPIENT, `"${to}" is the start of the name of the Herdr agent ${started.join(', ')}, so Chatter could deliver this message to the agent instead; nothing was sent. ${advice}`);
   }
+  // Chatter also counts the sender's own name for any name it does not know exactly, so it would take this
+  // one for the sender: a member's handle, or an agent name only the directory offers. Only an exact name of
+  // the roster is matched before that.
+  if (!onRoster && member.handle.toLowerCase().startsWith(to.toLowerCase())) {
+    const advice = toAgent ? `"${to}" is not a live agent of this repo.` : `${to} can still message you, or an admin can rename one of you.`;
+    throw new HttpError(409, AMBIGUOUS_RECIPIENT, `"${to}" is the start of your own handle, so Chatter would take it for you; nothing was sent. ${advice}`);
+  }
   if (toAgent && !admin && !member.can_address_agents) {
     throw new HttpError(403, 'agents_not_allowed', 'you may not message Herdr agents');
-  }
-  // Chatter also counts the sender's own name, so it would take this handle for the sender.
-  if (!toAgent && member.handle.toLowerCase().startsWith(to.toLowerCase())) {
-    throw new HttpError(409, AMBIGUOUS_RECIPIENT, `"${to}" is the start of your own handle, so Chatter would take it for you; nothing was sent. ${to} can still message you, or an admin can rename one of you.`);
   }
   return { mode: 'dm', body: text, to, toAgent, toMember, memberTargets: toMember ? [to] : [], everyone: false };
 }

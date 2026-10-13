@@ -12,9 +12,22 @@ const BYE = { epoch: 'epoch', error: 'error', revoked: 'revoked', tokenRotated: 
 // For a non-admin, whatever made `chatter agents` fail: Chatter's stderr and a failed run's error can name
 // host paths (the node binary, a member's config directory), which are admin only, as in /v1/repos.
 const AGENTS_ERROR_FOR_MEMBERS = 'Chatter could not list agents';
+// What a sender is told when Chatter does not write: its stderr can name host paths, so it goes to the log.
+const SEND_FAILED = "Chatter could not send the message; an admin can find the reason in the bridge's log";
+// The warnings Chatter 0.19.0 writes for a post (`postToChat`), as whole lines. A sender is shown a warning
+// only in one of these forms; any other stderr line could carry a host path, so it goes to the log instead.
+const KNOWN_WARNINGS = [
+  /^mention @[a-z0-9_-]+ matches no agent in this repo — not pushed$/,
+  /^@everyone is reserved for the human — post saved, nobody was pushed$/,
+];
 
 /** What a member who is not, or no longer, an admin is told, at the door and wherever it is checked again. */
 const adminOnly = () => new HttpError(403, 'admin_only', 'admin only');
+
+/** A member route's body must be a JSON object: `null`, a string, a number or an array is refused, never a 500. */
+function mustBeObject(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'bad_request', 'body must be a JSON object');
+}
 
 const intParam = (v, name) => {
   if (v === null || v === undefined || v === '') return null;
@@ -40,12 +53,13 @@ async function readJson(req) {
  * another process may have changed: its member is still active and, for a stream opened with a bearer
  * token (`credential`, the token's SHA-256), that token is still one of the member's live tokens. A
  * tailnet-identity stream has no token (`credential` null), so only its member's status counts.
- * Returns the current member record, or the reason the stream must end.
+ * Returns the current member record, or the reason the stream must end. The record and the credential are
+ * read together, from one snapshot of the registry.
  */
 function standing(store, handle, credential) {
-  const member = store.getMember(handle);
+  const { member, tokenLive } = store.memberAndToken(handle, credential);
   if (!member || member.status !== 'active') return { reason: BYE.revoked };
-  if (credential !== null && !store.isCurrentToken(handle, credential)) return { reason: BYE.tokenRotated };
+  if (credential !== null && !tokenLive) return { reason: BYE.tokenRotated };
   return { member };
 }
 
@@ -198,10 +212,10 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
   async function postMessage(actor, key, body) {
     const repo = await host.repo(key);
     if (repo.orphan || !repo.repo_root) throw new HttpError(409, 'repo_unwritable', 'repo no longer exists on this host');
-    // Reads the registry and the rosters together after its one await, so it decides on what they say now:
-    // the sender still active, with the credential the request came with, and their role and flags as they are.
-    const decide = async () => {
-      const agentNames = await host.agentNames();
+    // Synchronous, and given the agent names already loaded, so that a caller can decide and act in one run.
+    // It reads the registry and the roster as they are now: the sender still active, with the credential the
+    // request came with, and their role and flags as they are.
+    const decideWith = (agentNames) => {
       const current = actor.now();
       const members = activeHandles();
       const decision = checkWrite({
@@ -210,7 +224,7 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
       return { decision, members };
     };
     // Refused here, a send answers at once and costs no rate-limit token.
-    await decide();
+    decideWith(await host.agentNames());
     // Taken before the lock, so that one member cannot queue unlimited sends behind it. A send admitted here
     // keeps its slot even if it is refused when it is decided again inside the lock.
     limiter.take(actor.handle);
@@ -218,16 +232,20 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
     const result = await host.withLock(repo.key, async () => {
       // The send may have waited here behind others while the admin revoked its sender or changed what they
       // may do, its token was rotated, or an agent joined: decide again, and write only what that decision
-      // allows. Nothing awaits between the decision and the spawn in `host.run`.
-      const { decision, members } = await decide();
+      // allows. The one await comes first. From the decision to the spawn nothing awaits, so nothing else in
+      // this process runs between them: `host.run` spawns the child before it returns (`ChatterHost.run` is
+      // not async, and makes the member's config directory synchronously before it spawns).
+      const agentNames = await host.agentNames();
+      const { decision, members } = decideWith(agentNames);
       const db = host.openRO(repo);
       const before = maxMessageId(db);
       // `--queue` always follows the body, so a body that is literally "--queue" survives (see cmdSend).
       const args = decision.mode === 'post' ? ['post', decision.body] : ['send', decision.to, decision.body, '--queue'];
       const r = await host.run({ handle: actor.handle, cwd: repo.repo_root, args });
       if (r.code !== 0) {
-        const msg = (r.stderr || r.stdout).trim().split('\n').pop() || `exit ${r.code}`;
-        throw new HttpError(422, 'chatter_refused', msg);
+        // Chatter's stderr can name host paths or end in a stack, and a sender is not the operator.
+        log(`chatter ${args[0]} as ${actor.handle} in ${repo.key} failed (exit ${r.code}): ${(r.stderr || r.stdout).trim()}`);
+        throw new HttpError(422, 'chatter_refused', SEND_FAILED);
       }
       const to = decision.mode === 'post' ? '#chat' : decision.to;
       const id = findWritten(db, { afterId: before, from: actor.handle, to, kind: decision.mode === 'post' ? 'post' : 'chat', body: decision.body });
@@ -238,6 +256,10 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
     const pushed = (/pushed to (.+)$/m.exec(result.stdout)?.[1] || '').split(', ').filter(Boolean);
     const warnings = result.stderr.split('\n').filter((l) => l.startsWith('warning: ')).map((l) => l.slice(9))
       .filter((w) => {
+        if (!KNOWN_WARNINGS.some((known) => known.test(w))) {
+          log(`chatter warning for ${actor.handle} in ${repo.key}, held back: ${w}`);
+          return false;
+        }
         const m = /^mention @([a-z0-9_-]+) matches no agent/.exec(w);
         return !(m && members.has(m[1]));
       });
@@ -348,11 +370,13 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
   // ---------------------------------------------------------- admin routes
   async function addMember(actor, body) {
     const agentNames = await host.agentNames();
-    const kind = body.kind;
     // One transaction with its audit entry, so a 500 means no member and no token exist. The config
     // directory is made after the store has checked the handle; one left behind by a rollback is harmless.
+    // The body is judged only once the acting admin is authorised: one who is no longer gets 401 or 403 for it.
     return store.transaction(() => {
       actor.admin();
+      mustBeObject(body);
+      const { kind } = body;
       if (agentNames.has(body.handle)) {
         throw new HttpError(409, 'handle_is_agent', `"${body.handle}" is already a Herdr agent name`);
       }
@@ -431,7 +455,7 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
         const body = await readJson(req);
         const m = store.transaction(() => {
           actor.admin();
-          if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'bad_request', 'body must be a JSON object');
+          mustBeObject(body);
           const patch = {};
           for (const k of ['display_name', 'kind', 'role', 'can_address_agents', 'tailscale_login']) if (k in body) patch[k] = body[k];
           const updated = store.updateMember(handle, patch);

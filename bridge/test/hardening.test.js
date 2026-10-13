@@ -10,6 +10,8 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { ChatterHost } from '../src/chatter.js';
+import { createBridge } from '../src/server.js';
 import { Store } from '../src/store.js';
 import { haveChatter, makeEnv, openSse } from './helpers.js';
 
@@ -850,19 +852,21 @@ describe('T13c item 4: a queued send also checks the credential it came with', {
   });
 });
 
+/** An agent row in a scratch repo's Chatter database, as the `seedAgent` fixture does, optionally departed. */
+const seedIn = (repo, name, departedAt = null) => {
+  const db = new DatabaseSync(path.join(repo.dir, 'chatter.db'));
+  try {
+    db.prepare('INSERT INTO agents (name, kind, repo_root, registered_at, last_seen_at, departed_at) VALUES (?,?,?,?,?,?)')
+      .run(name, 'codex', repo.repo_root, '2026-10-09 00:00:00', '2026-10-09 00:00:00', departedAt);
+  } finally { db.close(); }
+};
+
 describe('T13c item 5: a DM to an agent name is checked against the roster of the repo it is sent in', { skip: SKIP }, () => {
   let x;
   let other; // a second repo of the same Chatter universe
   const countIn = (repo) => {
     const db = new DatabaseSync(path.join(repo.dir, 'chatter.db'), { readOnly: true });
     try { return db.prepare('SELECT COUNT(*) AS n FROM messages').get().n; } finally { db.close(); }
-  };
-  const seedIn = (repo, name, departedAt = null) => {
-    const db = new DatabaseSync(path.join(repo.dir, 'chatter.db'));
-    try {
-      db.prepare('INSERT INTO agents (name, kind, repo_root, registered_at, last_seen_at, departed_at) VALUES (?,?,?,?,?,?)')
-        .run(name, 'codex', repo.repo_root, '2026-10-09 00:00:00', '2026-10-09 00:00:00', departedAt);
-    } finally { db.close(); }
   };
   const rowOf = async (repo, id) => (await x.api('flan', 'GET', `/v1/repos/${repo.key}/messages?limit=500`)).body.messages.find((m) => m.id === id);
 
@@ -1006,28 +1010,30 @@ describe('T13c item 7: the add route commits nothing when the member config cann
   });
 });
 
+// The CLI as the operator runs it, in its own process, on a scratch state directory.
+const FAIL_AUDIT = "CREATE TRIGGER audit_fails BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'audit insert failed'); END";
+/** A bridge state directory with the admin flan and thom, who holds a token. */
+const stateDir = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-cli-'));
+  const s = new Store(path.join(dir, 'bridge.db'));
+  try {
+    s.addMember({ handle: 'flan', kind: 'human', role: 'admin', tailscale_login: 'flan@example.com' });
+    s.addMember({ handle: 'thom', kind: 'computational' });
+    return { dir, token: s.issueToken('thom') };
+  } finally { s.close(); }
+};
+const withStore = (dir, fn) => {
+  const s = new Store(path.join(dir, 'bridge.db'));
+  try { return fn(s); } finally { s.close(); }
+};
+// Only the exit code is kept: `token rotate` and `member add` print a new token.
+const cliWith = (dir, env, ...args) => new Promise((resolve) => {
+  execFile(process.execPath, ['--no-warnings', BIN, ...args], { env: { ...process.env, ...env, CHATTER_BRIDGE_STATE_DIR: dir } }, (err) => resolve(err ? err.code : 0));
+});
+const cli = (dir, ...args) => cliWith(dir, {}, ...args);
+
 // No Chatter needed: these commands touch only the bridge's own database.
 describe('T13c item 7: the CLI makes each change and its audit entry one transaction', () => {
-  const FAIL_AUDIT = "CREATE TRIGGER audit_fails BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'audit insert failed'); END";
-  /** A bridge state directory with the admin flan and thom, who holds a token. */
-  const stateDir = () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-cli-'));
-    const s = new Store(path.join(dir, 'bridge.db'));
-    try {
-      s.addMember({ handle: 'flan', kind: 'human', role: 'admin', tailscale_login: 'flan@example.com' });
-      s.addMember({ handle: 'thom', kind: 'computational' });
-      return { dir, token: s.issueToken('thom') };
-    } finally { s.close(); }
-  };
-  const withStore = (dir, fn) => {
-    const s = new Store(path.join(dir, 'bridge.db'));
-    try { return fn(s); } finally { s.close(); }
-  };
-  // Only the exit code is kept: `token rotate` prints the new token.
-  const cli = (dir, ...args) => new Promise((resolve) => {
-    execFile(process.execPath, ['--no-warnings', BIN, ...args], { env: { ...process.env, CHATTER_BRIDGE_STATE_DIR: dir } }, (err) => resolve(err ? err.code : 0));
-  });
-
   const commands = [
     ['token rotate', ['token', 'rotate', 'thom']],
     ['member revoke', ['member', 'revoke', 'thom']],
@@ -1067,6 +1073,347 @@ describe('T13c item 7: the CLI makes each change and its audit entry one transac
         assert.equal(s.getMember('thom').status, 'revoked');
         assert.deepEqual(s.listAudit().map((e) => [e.actor, e.action, e.target]), [
           ['cli', 'member_revoke', 'thom'], ['cli', 'token_rotate', 'thom'], ['cli', 'member_update', 'thom'],
+        ]);
+      });
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// T13d: one snapshot, one continuation, no host paths (G2 round 6).
+
+/**
+ * Calls `ran(sql, args)` just after each statement on `store`'s own connection has run, until the returned
+ * function restores the connection. Wrapping the run, not the prepare, puts a change made in `ran` after the
+ * statement's read and before whatever the caller does next.
+ */
+function afterEachStatement(store, ran) {
+  const db = store.db;
+  const statement = (target, sql) => new Proxy(target, {
+    get(t, key) {
+      const value = Reflect.get(t, key);
+      if (typeof value !== 'function') return value;
+      if (!['get', 'all', 'run', 'iterate'].includes(key)) return value.bind(t);
+      return (...args) => {
+        const out = value.apply(t, args);
+        ran(sql, args);
+        return out;
+      };
+    },
+  });
+  store.db = new Proxy(db, {
+    get(target, key) {
+      const value = Reflect.get(target, key);
+      if (key === 'prepare') return (sql) => statement(target.prepare(sql), sql);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return () => { store.db = db; };
+}
+
+describe('T13d item 1: a member and their credential are read from one snapshot', { skip: SKIP }, () => {
+  // Between two separate reads, a demotion or a rotation by another process still gives an answer that one
+  // snapshot gives (a token only ever goes from live to dead). A revocation does not: the record says active,
+  // the token check says dead, and the stream is told its token was rotated.
+  test('a revocation another process commits during the check ends the stream as revoked, never as rotated; the check is one statement', async () => {
+    const x = await makeEnv({ pollMs: 50 });
+    let restore = () => {};
+    try {
+      x.addMember('grace');
+      const s = await openSse(streamUrl(x), bearer(x, 'grace'));
+      await s.waitFor(isHello);
+      // From here on, the only statements that name grace are the watcher's checks of her stream.
+      let armed = true;
+      let check = null;
+      let counted = null;
+      restore = afterEachStatement(x.store, (sql, args) => {
+        if (!args.includes('grace')) return;
+        if (check) { check.push(sql); return; }
+        if (!armed) return;
+        armed = false;
+        check = [sql];
+        // The earliest moment after the check's first read.
+        asAnotherProcess(x, (cli) => cli.revokeMember('grace'));
+        // The check runs inside one watcher tick, synchronously: it is over when the tick is.
+        setImmediate(() => { counted = check; check = null; });
+      });
+      const bye = await s.waitFor(isBye, 2000);
+      assert.equal(bye.data.reason, BYE.revoked, 'a revoked member is told so, not that a token was rotated');
+      assert.ok(counted, 'the revocation landed inside a check');
+      assert.equal(counted.length, 1, 'the member and the credential are read by one statement');
+      s.close();
+    } finally {
+      restore();
+      await x.stop();
+    }
+  });
+});
+
+describe('T13d item 2: a send is decided and spawned in one run', { skip: SKIP }, () => {
+  // The window between the approval and the write is a microtask hop, which no request can be placed in
+  // through the API: so a change is queued as a microtask during the decision itself, the earliest that
+  // anything else in this process can run after it, and the test looks at where it lands.
+  test('a revocation queued while a send is decided inside the lock lands after the spawn, never between the approval and the write', async () => {
+    const x = await makeEnv();
+    try {
+      x.addMember('thom');
+      // Each decision reads the repo's roster: once before the lock, once inside it.
+      let decisions = 0;
+      const rosterNames = x.host.rosterNames;
+      x.host.rosterNames = function roster(repo) {
+        decisions += 1;
+        if (decisions === 2) queueMicrotask(() => asAnotherProcess(x, (cli) => cli.revokeMember('thom')));
+        return rosterNames.call(this, repo);
+      };
+      let atSpawn = null;
+      const run = x.host.run;
+      x.host.run = function spawning(o) {
+        if (o.args[0] === 'post') atSpawn = x.store.getMember('thom').status;
+        return run.call(this, o);
+      };
+      const before = x.count();
+      const r = await x.post('thom', '#chat', 'approved while thom was active');
+      assert.equal(decisions, 2, 'decided before the lock and inside it');
+      assert.equal(atSpawn, 'active', 'the write began in the run that approved it, before anything queued there');
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      assert.equal(x.count(), before + 1, 'the approved message was written');
+      assert.equal(x.store.getMember('thom').status, 'revoked', 'the revocation landed, after the spawn');
+    } finally { await x.stop(); }
+  });
+});
+
+describe('T13d item 3: a failure to list the repositories carries no host path', () => {
+  const REPOS_FAILED = 'Chatter could not list the repositories';
+  let root;
+  let missing;
+  let lines;
+  let store;
+  let host;
+  let app;
+  let base;
+  const tokens = {};
+  // Chatter pointed at a script that is not there: node's stderr names the script's absolute path and a stack.
+  before(async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-broken-'));
+    missing = path.join(root, 'no-such-chatter', 'chatter.js');
+    lines = [];
+    const log = (l) => { lines.push(l); };
+    store = new Store(path.join(root, 'bridge.db'));
+    store.addMember({ handle: 'flan', kind: 'human', role: 'admin' });
+    store.addMember({ handle: 'grace', kind: 'computational' });
+    tokens.flan = store.issueToken('flan');
+    tokens.grace = store.issueToken('grace');
+    host = new ChatterHost({ cmd: [process.execPath, '--no-warnings', missing], memberConfigRoot: path.join(root, 'members'), log });
+    app = createBridge({ store, host, log });
+    base = `http://127.0.0.1:${(await app.listen(0)).port}`;
+  });
+  after(async () => {
+    await app.close();
+    host.close();
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const get = (p, who) => fetch(`${base}${p}`, { headers: who ? { Authorization: `Bearer ${tokens[who]}` } : {} })
+    .then(async (r) => ({ status: r.status, text: await r.text() }));
+  const fixedAndPathFree = (r, what) => {
+    assert.equal(r.status, 502, what);
+    assert.deepEqual(JSON.parse(r.text), { error: { code: 'chatter_error', message: REPOS_FAILED } }, what);
+    assert.ok(!r.text.includes(root), `${what}: no host path`);
+    assert.ok(!r.text.includes('Cannot find module'), `${what}: none of node's message`);
+    assert.ok(!r.text.includes('    at '), `${what}: no stack`);
+  };
+
+  test('GET /healthz, which needs no credentials, answers a fixed message', async () => {
+    fixedAndPathFree(await get('/healthz', null), '/healthz');
+  });
+
+  test('GET /v1/repos answers the same fixed message to a member and to an admin', async () => {
+    fixedAndPathFree(await get('/v1/repos', 'grace'), 'as a member');
+    fixedAndPathFree(await get('/v1/repos', 'flan'), 'as an admin');
+  });
+
+  test('the host logs what Chatter printed, for the operator, and throws only the fixed message', async () => {
+    const logged = [];
+    const alone = new ChatterHost({ cmd: [process.execPath, '--no-warnings', missing], memberConfigRoot: path.join(root, 'members'), log: (l) => { logged.push(l); } });
+    try {
+      await assert.rejects(alone.repos(), (e) => e.status === 502 && e.code === 'chatter_error' && e.message === REPOS_FAILED);
+    } finally { alone.close(); }
+    assert.equal(logged.length, 1, 'one line per failure');
+    assert.ok(logged[0].includes(missing) && logged[0].includes('Cannot find module'), 'the line carries the detail');
+    assert.ok(lines.some((l) => l.includes(missing)), 'the bridge\'s log got the detail of the failed requests too');
+  });
+});
+
+describe('T13d item 3: what Chatter prints when a send fails or warns stays in the log', { skip: SKIP }, () => {
+  const SEND_FAILED = 'Chatter could not send the message; an admin can find the reason in the bridge\'s log';
+
+  test('a send Chatter refuses answers 422 with a fixed message, to a member and an admin; the log has the detail', async () => {
+    const lines = [];
+    const x = await makeEnv({ log: (l) => { lines.push(l); } });
+    try {
+      x.addMember('grace');
+      const secret = path.join(x.root, 'secret', 'chatter.db');
+      const realRun = x.host.run.bind(x.host);
+      // Only the write fails, with a path on the last line of stderr, where the bridge used to read its message.
+      x.host.run = (o) => (o.args[0] === 'post'
+        ? Promise.resolve({ code: 1, stdout: '', stderr: `Error: unable to open ${secret}\n    at open (${secret}:1:1)\n` })
+        : realRun(o));
+      for (const who of ['grace', 'flan']) {
+        const r = await x.post(who, '#chat', 'refused by Chatter');
+        assert.equal(r.status, 422, who);
+        assert.deepEqual(r.body, { error: { code: 'chatter_refused', message: SEND_FAILED } }, who);
+      }
+      assert.ok(lines.some((l) => l.includes(secret)), 'the log has the detail');
+    } finally { await x.stop(); }
+  });
+
+  test('a warning reaches the sender only in a form Chatter 0.19.0 writes; any other line goes to the log', async () => {
+    const lines = [];
+    const x = await makeEnv({ log: (l) => { lines.push(l); } });
+    try {
+      x.addMember('grace');
+      const secret = path.join(x.root, 'secret');
+      const known = 'mention @ghost matches no agent in this repo — not pushed';
+      const realRun = x.host.run.bind(x.host);
+      x.host.run = (o) => (o.args[0] === 'post'
+        ? Promise.resolve({ code: 0, stdout: 'posted to #chat (#99)\n', stderr: `warning: ${known}\nwarning: could not read ${secret}\n` })
+        : realRun(o));
+      const r = await x.post('grace', '#chat', 'hi @ghost');
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      assert.deepEqual(r.body.warnings, [known]);
+      assert.ok(lines.some((l) => l.includes(secret)), 'the log has the line that was held back');
+    } finally { await x.stop(); }
+  });
+});
+
+describe('T13d item 4: a DM to a name that is not on the roster and is the start of the sender\'s handle is refused', { skip: SKIP }, () => {
+  // The directory offers thom, a departed agent; no live agent's name starts with it. Chatter takes a name it
+  // does not know exactly as the one candidate it is the start of, and the sender's own name is a candidate.
+  const world = async (o = {}) => {
+    const x = await makeEnv(o);
+    x.addMember('thomas');
+    x.addMember('thoma', { can_address_agents: false });
+    seedIn(x.repoInfo, 'thom', '2026-10-09 01:00:00');
+    seedIn(x.repoInfo, 'tho');
+    return x;
+  };
+
+  test('the bridge refuses it with 409 before it takes a rate-limit slot, and nothing is written', async () => {
+    const x = await world({ limits: { maxBody: 8000, postsPerMinute: 1 } });
+    try {
+      const before = x.count();
+      const r = await x.post('thomas', 'thom', 'for the departed thom');
+      assert.equal(r.status, 409, JSON.stringify(r.body));
+      assert.equal(r.body.error.code, ERR.ambiguous);
+      assert.match(r.body.error.message, /^"thom" is the start of your own handle, /);
+      assert.equal(x.count(), before, 'nothing was written');
+      assert.equal((await x.post('thomas', '#chat', 'the slot is still there')).status, 201);
+    } finally { await x.stop(); }
+  });
+
+  test('a member who may not address agents is told the same, not that agents are off limits', async () => {
+    const x = await world();
+    try {
+      const r = await x.post('thoma', 'thom', 'for the departed thom');
+      assert.equal(r.status, 409, JSON.stringify(r.body));
+      assert.equal(r.body.error.code, ERR.ambiguous);
+    } finally { await x.stop(); }
+  });
+
+  test('an exact name of the roster is still that agent, though it is the start of the sender\'s handle', async () => {
+    const x = await world();
+    try {
+      const r = await x.post('thomas', 'tho', 'for the live tho');
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      assert.equal(r.body.delivery, 'queued');
+      const row = (await x.messages('flan', '?limit=500')).body.messages.find((m) => m.id === r.body.id);
+      assert.equal(row.to, 'tho');
+    } finally { await x.stop(); }
+  });
+});
+
+describe('T13d item 5: POST /v1/members answers 400 to a body that is not a JSON object', { skip: SKIP }, () => {
+  let x;
+  before(async () => {
+    x = await makeEnv();
+    x.addMember('ada', { role: 'admin' });
+  });
+  after(async () => { await x.stop(); });
+
+  // The answer is never printed: an add that went through would carry a token.
+  const raw = (who, text) => fetch(`${x.base}/v1/members`, {
+    method: 'POST', headers: { ...bearer(x, who), 'Content-Type': 'application/json' }, body: text,
+  }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+
+  for (const text of ['null', '"ezra"', '["ezra"]', '42', 'false']) {
+    test(`${text} answers 400 bad_request and adds nobody`, async () => {
+      const members = x.store.listMembers().length;
+      const audited = lastAuditId(x);
+      const r = await raw('flan', text);
+      assert.equal(r.status, 400);
+      assert.equal(r.body?.error?.code, ERR.badRequest);
+      assert.equal(x.store.listMembers().length, members, 'nobody was added');
+      assert.equal(lastAuditId(x), audited, 'no audit entry');
+    });
+  }
+
+  test('the body is judged inside the authorised transaction: an admin demoted meanwhile gets 403 for a null body', async () => {
+    beforeNextTransaction(x, () => asAnotherProcess(x, (s) => s.updateMember('ada', { role: 'member' })));
+    const r = await raw('ada', 'null');
+    assert.equal(r.status, 403);
+    assert.equal(r.body?.error?.code, ERR.adminOnly);
+  });
+});
+
+// No Chatter needed: `member add` lists the agent names first, from this stand-in that knows no repo, so the
+// test never reaches a real Chatter or its state.
+describe('T13d item 5: the CLI\'s init and member add make their change and its audit entry one transaction', () => {
+  const NO_REPOS = { CHATTER_CMD: JSON.stringify([process.execPath, '-e', "process.stdout.write('[]')"]) };
+  /** A bridge state directory with no member yet, as before `init`. */
+  const emptyStateDir = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-cli-'));
+    withStore(dir, () => {});
+    return dir;
+  };
+
+  test('member add: a failed audit insert adds nobody and issues no token', async () => {
+    const { dir } = stateDir();
+    try {
+      withStore(dir, (s) => s.db.exec(FAIL_AUDIT));
+      assert.equal(await cliWith(dir, NO_REPOS, 'member', 'add', 'ezra', '--kind', 'computational'), 1, 'the command fails');
+      withStore(dir, (s) => {
+        assert.equal(s.getMember('ezra'), null, 'no member');
+        assert.equal(tokenCount(s, 'ezra'), 0, 'no token');
+        assert.equal(s.listAudit().length, 0, 'no audit entry');
+      });
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('init: a failed audit insert creates no admin', async () => {
+    const dir = emptyStateDir();
+    try {
+      withStore(dir, (s) => s.db.exec(FAIL_AUDIT));
+      assert.equal(await cli(dir, 'init', '--login', 'flan@example.com', '--handle', 'flan'), 1, 'the command fails');
+      withStore(dir, (s) => {
+        assert.equal(s.getMember('flan'), null, 'no member');
+        assert.equal(s.countAdmins(), 0, 'no admin');
+        assert.equal(s.listAudit().length, 0, 'no audit entry');
+      });
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('without a failure init and member add make their change and write their entry', async () => {
+    const dir = emptyStateDir();
+    try {
+      assert.equal(await cli(dir, 'init', '--login', 'flan@example.com', '--handle', 'flan'), 0);
+      assert.equal(await cliWith(dir, NO_REPOS, 'member', 'add', 'ezra', '--kind', 'computational'), 0);
+      withStore(dir, (s) => {
+        assert.equal(s.getMember('flan').role, 'admin');
+        assert.equal(s.getMember('ezra').kind, 'computational');
+        assert.equal(tokenCount(s, 'ezra'), 1, 'a computational member gets a token');
+        assert.deepEqual(s.listAudit().map((e) => [e.actor, e.action, e.target]), [
+          ['cli', 'member_add', 'ezra'], ['cli', 'init', 'flan'],
         ]);
       });
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }

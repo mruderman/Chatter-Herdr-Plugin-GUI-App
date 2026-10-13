@@ -44,12 +44,16 @@ const parseCmd = (s) => (s.trim().startsWith('[') ? JSON.parse(s) : s.trim().spl
 const fail = (msg) => { console.error(`error: ${msg}`); process.exit(1); };
 
 const stateDir = process.env.CHATTER_BRIDGE_STATE_DIR || path.join(os.homedir(), '.local', 'state', 'chatter-bridge');
+// The operator's log, for the server and for the host: what Chatter printed when it failed goes here, never
+// into an answer, so every command, not only `serve`, keeps the detail.
+const log = (l) => console.log(`${new Date().toISOString()} ${l}`);
 const store = new Store(path.join(stateDir, 'bridge.db'));
 const host = new ChatterHost({
   cmd: parseCmd(process.env.CHATTER_CMD || 'chatter'),
   memberConfigRoot: path.join(stateDir, 'members'),
   adminConfigDir: process.env.CHATTER_ADMIN_CONFIG_DIR || null,
   stateDir: process.env.CHATTER_STATE_DIR || null,
+  log,
 });
 
 const table = (rows, cols) => {
@@ -67,9 +71,13 @@ async function main() {
     if (!handle) fail('no handle: pass --handle, or set your Chatter name first with `chatter iam <name>`');
     if (!args.login) fail('--login <tailscale-login> is required (the admin signs in through the tailnet)');
     if (store.countAdmins() > 0) fail('an admin already exists; use `member add --role admin` for more');
-    const m = store.addMember({ handle, display_name: args.name || handle, kind: 'human', role: 'admin', tailscale_login: args.login });
-    host.ensureMemberConfig(m.handle);
-    store.audit({ actor: 'cli', action: 'init', target: m.handle });
+    // One transaction with its audit entry, as every registry change: a failure creates no admin.
+    const m = store.transaction(() => {
+      const added = store.addMember({ handle, display_name: args.name || handle, kind: 'human', role: 'admin', tailscale_login: args.login });
+      host.ensureMemberConfig(added.handle);
+      store.audit({ actor: 'cli', action: 'init', target: added.handle });
+      return added;
+    });
     console.log(`admin "${m.handle}" created, mapped to Tailscale login ${args.login}`);
     return;
   }
@@ -86,7 +94,7 @@ async function main() {
       trustTailscale: process.env.CHATTER_BRIDGE_TRUST_TAILSCALE === '1',
       origins: (process.env.CHATTER_BRIDGE_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
       staticDir: process.env.CHATTER_BRIDGE_STATIC_DIR || null,
-      log: (l) => console.log(`${new Date().toISOString()} ${l}`),
+      log,
     });
     const addr = await app.listen(port, hostName);
     console.log(`chatter-bridge ${VERSION} listening on http://${addr.address}:${addr.port}`);
@@ -107,16 +115,20 @@ async function main() {
     if (sub === 'add') {
       if (!args.kind) fail('--kind human|computational is required');
       if ((await host.agentNames()).has(handle)) fail(`"${handle}" is already a Herdr agent name`);
-      const m = store.addMember({
-        handle, display_name: args.name || handle, kind: args.kind, role: args.role || 'member',
-        can_address_agents: !args['no-agents'], tailscale_login: args.login || null,
+      // The member, its token and the audit entry are one transaction, as in the HTTP route: a failure leaves
+      // no member and no token.
+      const { m, token } = store.transaction(() => {
+        const added = store.addMember({
+          handle, display_name: args.name || handle, kind: args.kind, role: args.role || 'member',
+          can_address_agents: !args['no-agents'], tailscale_login: args.login || null,
+        });
+        host.ensureMemberConfig(added.handle);
+        const issued = added.kind === 'computational' ? store.issueToken(handle) : null;
+        store.audit({ actor: 'cli', action: 'member_add', target: handle, detail: { kind: added.kind, role: added.role } });
+        return { m: added, token: issued };
       });
-      host.ensureMemberConfig(m.handle);
-      store.audit({ actor: 'cli', action: 'member_add', target: handle, detail: { kind: m.kind, role: m.role } });
       console.log(`member "${handle}" added (${m.kind}, ${m.role})`);
-      if (m.kind === 'computational') {
-        console.log(`token (shown once, store it in the member's secret store):\n${store.issueToken(handle)}`);
-      }
+      if (token) console.log(`token (shown once, store it in the member's secret store):\n${token}`);
       return;
     }
     // Each change below and its audit entry are one transaction, as in the HTTP routes: a failure changes nothing.

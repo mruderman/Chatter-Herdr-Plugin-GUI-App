@@ -115,6 +115,17 @@ test('policy: a DM to an agent name counts as that agent only if it is a live na
   refused(() => checkWrite({ member: member(), to: 'cod', body: 'x', ...p, repoAgents: ['CODEX'] }), 'ambiguous_recipient');
 });
 
+// T13d item 4. Chatter counts the sender's own name among the candidates for any name it does not know exactly,
+// so a name that only the directory offers (a departed agent, an agent of another repo) is no exception.
+test('policy: a DM to a name that is not exactly on the roster and is the start of the sender\'s handle is refused', () => {
+  const p = { agentNames: new Set(['thom', 'tho']), repoAgents: ['tho'], memberHandles: new Set(['flan', 'thomas']) };
+  for (const who of [member({ handle: 'thomas' }), member({ handle: 'thomas', can_address_agents: false }), { ...admin, handle: 'thomas' }]) {
+    refused(() => checkWrite({ member: who, to: 'thom', body: 'x', ...p }), 'ambiguous_recipient');
+  }
+  assert.equal(checkWrite({ member: member({ handle: 'thomas' }), to: 'tho', body: 'x', ...p }).toAgent, true, 'an exact roster name is that agent');
+  refused(() => checkWrite({ member: member({ handle: 'thomas', can_address_agents: false }), to: 'tho', body: 'x', ...p }), 'agents_not_allowed');
+});
+
 // T13c item 7. The predicate is that the agent's name begins with the handle, so the message says it that way.
 test('policy: a prefix refusal says the handle is the start of the name', () => {
   const p = { agentNames: new Set(['codex-worker', 'grace-worker']), repoAgents: ['codex-worker', 'grace-worker'], memberHandles: new Set(['thom', 'grace', 'zed', 'zedd']) };

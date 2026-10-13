@@ -200,9 +200,17 @@ export class Store {
     return toMember(row);
   }
 
-  /** Whether `hash` (a token's SHA-256) is still a live token of `handle`; a rotation by any process ends it. */
-  isCurrentToken(handle, hash) {
-    return !!this.db.prepare('SELECT 1 AS live FROM tokens WHERE token_hash = ? AND handle = ? AND revoked_at IS NULL').get(hash, handle);
+  /**
+   * A member's record, and whether `hash` (a token's SHA-256, or null for no token) is still one of their live
+   * tokens. One statement, so both come from one snapshot: the CLI in another process can commit between two
+   * statements, and a revocation would then read as an active member whose token was rotated.
+   */
+  memberAndToken(handle, hash) {
+    const row = this.db.prepare(
+      `SELECT m.*, EXISTS (SELECT 1 FROM tokens t WHERE t.token_hash = ? AND t.handle = m.handle AND t.revoked_at IS NULL) AS token_live
+       FROM members m WHERE m.handle = ?`,
+    ).get(hash, handle);
+    return { member: toMember(row), tokenLive: !!row?.token_live };
   }
 
   // --------------------------------------------------------------- audit
