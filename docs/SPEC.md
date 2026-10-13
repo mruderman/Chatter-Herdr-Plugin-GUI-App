@@ -31,7 +31,9 @@ Proposed targets (not agreed): a new message reaches every connected client with
 | D8 | `@everyone` | Admin only, enforced by the bridge (Chatter allows it for anyone, F9) | Default |
 | D9 | License | MIT (assumed; not yet confirmed) | Default |
 | D10 | Code home | https://github.com/mruderman/Chatter-Herdr-Plugin-GUI-App | Decided |
-| D11 | Which Chatter state the bridge serves | One state directory via `CHATTER_STATE_DIR`. Which of the host's Herdr servers is open | Open |
+| D11 | Which Chatter state the bridge serves | One state directory via `CHATTER_STATE_DIR`. Which of the host's Herdr servers is open for production. For testing: any Herdr on any tailnet machine except `baremetalcyansociety` is a test installation (Flan, 2026-10-13) | Open (production) |
+| D18 | Search | Client-side over the IndexedDB archive; no bridge route (a member can only search what they could see, it works offline, and no regular expression runs on the bridge host). Modes: keyword with "Match case", regular expression, fuzzy later. One pure matcher used by the UI and the tests, scanned in a Web Worker with cancel and a time limit. Highlights are text segments and `<mark>`, never HTML | Decided (Flan, 2026-10-13), part of M4 |
+| D19 | Archive scope | `#chat` only by default; the DMs the member can see are kept only if they opt in, as for the export (D1) | Decided (Flan, 2026-10-13), part of M4 |
 
 Range export is inclusive at both ends. "Between 200 and 100 messages ago" is positions 100 to 200 (101 messages). Confirmed by Flan.
 
@@ -109,6 +111,8 @@ Accessibility target WCAG 2.2 AA: full keyboard use, polite live region for new 
 
 Archive: IndexedDB, append-only. Stores `messages` (key repo+id, plus `host_state` present or purged), `cursors` (per repo: highest id, epoch, last sync), `members` snapshot (so offline exports can label senders). First sync pages `after_id=0` in 500-message pages. The client never deletes a message; on an epoch change it keeps its copies and marks them purged. The PWA requests persistent storage. The export dialog shows which ids are held and warns before saving if older history was not downloaded.
 
+Search (M4, D18): over the archive in the browser, never over a bridge route. Keyword search with a "Match case" checkbox and regular-expression search ship first; fuzzy only if it stays simple and needs no dependency Flan has not approved. One pure matcher module is used by the UI and by the tests, and the scan runs in a Web Worker (the CSP already allows `worker-src 'self'`) with cancel and a time limit, so a catastrophic expression such as `(a+)+$` cancels and the page stays responsive. An invalid expression shows a message, never an exception. Matches are highlighted by splitting the text into segments around `<mark>`, never by HTML. The results region says how much was searched ("Searching N messages; older history not downloaded") and labels messages purged on the host. Scope: this repo, with options for this conversation or all repos. Opening a result in the live feed is deferred. The UI contract section (mode radio group, the checkbox, a live "N results" region, full keyboard use) is written before the E2E specs.
+
 ## 8. Markdown export
 
 Position 1 is the newest message in the chosen scope, counting only messages the member may see.
@@ -130,14 +134,15 @@ With D4 on, any registered member can put text into an agent's terminal; the aud
 
 ## 11. Tests and milestones
 
-Run `CHATTER_JS=<chatter clone>/dist/bin/chatter.js npm test`. Current state: 30 tests pass (11 unit, 15 against the real Chatter CLI, 4 for the member client). Mutation checks confirmed the tests fail when the `@everyone` rule or DM visibility is broken.
+Run `CHATTER_JS=<chatter clone>/dist/bin/chatter.js npm test`. Current state (end of M3): 215 bridge tests pass against the real Chatter CLI, none skipped; the client has 1463 unit tests and 29 end-to-end specs (`npm --prefix client test`, `npm --prefix client run e2e`). Mutation checks confirmed the tests fail when the `@everyone` rule or DM visibility is broken.
 
 | Milestone | Gate |
 | --- | --- |
 | M1 Spec | done |
 | M2 Bridge | done: contract tests pass against Chatter 0.19.0, including the `@everyone` rejection |
-| M3 Client core | two clients exchange messages end to end in headless Chromium |
-| M4 Archive and export | an offline export matches the online export byte for byte |
+| M3 Client core | done: two clients exchange messages end to end in headless Chromium against a real bridge and Chatter; a DM is invisible to a third member; a non-admin's `@everyone` is refused with a visible error; the main flow works by keyboard alone; axe reports nothing serious in three themes |
+| Deploy and verify (between M3 and M4) | a repeatable build and runbook, and a real-Herdr smoke on a test host with every item recorded as pass, fail or blocked (`docs/plans/deploy-verify.md`) |
+| M4 Archive and export, with search | an offline export matches the online export byte for byte; search over a seeded 10,000-message corpus works in each mode and with the case toggle, a catastrophic regular expression cancels and the page stays responsive, a message holding `<img onerror>` renders as text, a DM between two other members never appears, and axe is clean in three themes |
 | M5 Packaging | both installers build and the PWA passes the offline end-to-end run |
 | M6 Verification on Flan's machines | the manual checklist passes or becomes tracked fixes |
 | v1.1 | `/spawn` and `/team` wizards, MCP adapter |
