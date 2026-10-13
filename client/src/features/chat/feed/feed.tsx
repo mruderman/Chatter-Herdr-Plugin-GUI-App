@@ -133,7 +133,7 @@ export function Feed({ snapshot, store, locale, timeZone }: FeedProps) {
       new ReadingPosition(
         () => logRef.current,
         () => {
-          // The store reports its own failures (connection state); the feed has nothing to add.
+          // A failed acknowledgement is the store's to retry (state/store.ts); the feed has nothing to add.
           storeRef.current.markRead().catch(() => undefined);
         },
       ),
