@@ -8,8 +8,9 @@ A bridge and web client that give every Cyan Society member, human or computatio
 
 ## State
 
-- M1 spec: done. M2 bridge: done (30 tests pass).
-- **Next: M3, the web client core.** Then M4 archive and export, M5 packaging, M6 verification on Flan's machines. Gates are in `docs/SPEC.md` section 11.
+- M1 spec: done. M2 bridge: done. **M3 web client core: done**, its gate passes, and G2 (the adversarial review, 7 rounds) is closed. On the final tree: 215 bridge tests with real Chatter (none skipped), 1463 client unit tests, 29 E2E specs, and the three gate mutations (break `canSee`, drop the `@everyone` rule, drop the CSP) each turn their named spec red.
+- **Source of truth for where we are: `docs/STATUS.md` (and git), not this file.** It holds the running tasks, the Debt list of open findings with their evidence, and the unverified list (real Herdr delivery, a real agent run, screen readers, Firefox and Safari, a real OS notification).
+- **Next: deploy-and-verify** (`docs/plans/deploy-verify.md`: a repeatable build, the systemd unit, a real-Herdr smoke on a test host, a real agent run), then M4 (archive and export, with client-side search) and an optional PWA slice, each planned in `docs/plans/` and approved by Flan before it is dispatched. M5 packaging and M6 verification follow. Gates are in `docs/SPEC.md` section 11.
 
 ## Run the tests (baseline before any change)
 
@@ -17,8 +18,11 @@ A bridge and web client that give every Cyan Society member, human or computatio
 git clone https://github.com/marcvermeeren/chatter.git ~/src/chatter   # dist/ is committed; no build needed
 export CHATTER_JS=~/src/chatter/dist/bin/chatter.js
 node --version        # needs 22.5 or later
-npm test              # expect 30 passing
+npm test              # expect 215 passing, none skipped
+npm --prefix client ci && npm --prefix client test        # expect 1463 passing
+npm --prefix client run e2e                               # builds client/dist, boots a real bridge; expect 29 passed
 ```
+(`client/` needs its own `npm ci` with `ignore-scripts`; Playwright uses an already cached Chromium: never run `playwright install` without Flan's yes. The one ✘ in the E2E list is a `test.fail()` canary that counts as passed. `docs/review/final-check.py` runs everything plus the gate mutations.)
 
 Contract tests run the bridge against a real Chatter CLI in a scratch repo (no Herdr). Without `CHATTER_JS` they skip.
 
@@ -28,22 +32,13 @@ Contract tests run the bridge against a real Chatter CLI in a scratch repo (no H
 - `bridge/bin/chatter-bridge.js`: init, serve, member, token, audit commands.
 - `bridge/test/`: unit, integration (real Chatter), client. `helpers.js` builds a scratch universe plus a running bridge; reuse it for end-to-end tests.
 - `clients/chatter-member.mjs` and `skills/chatter-gui/`: the CLI and agent skill for computational members. The skill's script must stay identical to the client (a test checks).
-- `deploy/`: systemd user unit.
+- `client/`: the web client (Vite, Preact, TypeScript): `src/api` (typed client, SSE over fetch), `src/state` (the store, the fakes and the parity test against a real bridge), `src/features` (shell, chat, board, members, admin, notify), `e2e/` (Playwright specs and harness against a real bridge over real Chatter).
+- `docs/`: `SPEC.md`, `ui-contract.md`, `STATUS.md` (the pointer), `working-agreement.md`, `executor-context.md`, `dependencies.md`, `plans/` (one plan per milestone), `review/` (mutation runners, the closing check, the Codex review prompt template and the review loop).
+- `deploy/`: systemd user unit (does not yet set `CHATTER_BRIDGE_STATIC_DIR`; the deploy-and-verify slice does).
 
-## M3 scope: client core
+## M3 (done): client core
 
-Build `client/` as a TypeScript web app served by the bridge at `/`. Defaults I chose, change only with Flan's agreement: Vite, TypeScript (strict), Preact, plain CSS with custom properties (light, dark, high-contrast, reduced-motion), `idb` for IndexedDB, Vitest for units, Playwright with Chromium for end to end, axe-core for accessibility checks.
-
-1. Bridge: serve `client/dist` at `/` with SPA fallback and a strict Content-Security-Policy; configurable by `CHATTER_BRIDGE_STATIC_DIR`. Tests first.
-2. API module with types matching `docs/SPEC.md` section 5; SSE with resume from `Last-Event-ID` and reconnect backoff; handle `bye` reasons (`revoked` stops reconnecting, `epoch` triggers a resync).
-3. Authentication: in production the tailnet identity header does the work (same origin). For development and tests, a token field kept in memory only.
-4. Chat feed, composer with @-completion (members and agents), DMs, repo switcher, read pointer and "new" marker, board (read-only), member list with kind badges, admin panel (members, audit), connection badge, desktop notifications for mentions and DMs.
-5. Render message text as plain text only. No HTML, no remote images, links shown as text.
-6. Accessibility per `docs/SPEC.md` section 7. Automated axe checks must report no serious or critical violations.
-
-Gate: two Playwright clients exchange messages end to end against a real bridge and real Chatter; a DM is invisible to a third member; a member's `@everyone` is refused with a visible error; the main flow works by keyboard alone.
-
-M4 (archive and export) and later milestones are specified in `docs/SPEC.md`; do not start them until M3's gate passes.
+`client/` is served by the bridge at `/` with a strict CSP (`CHATTER_BRIDGE_STATIC_DIR`). Decisions D12 to D17 and the task briefs are in `docs/plans/m3-client.md`; the UI contract is `docs/ui-contract.md`. Message text renders as plain text only (no HTML, no remote images, links as text). Dependencies in `client/` are pinned exactly, at least two weeks old, vetted per `docs/dependencies.md`; the bridge stays zero-dependency. M4 (archive and export) and later milestones are specified in `docs/SPEC.md`; none starts before its plan in `docs/plans/` is approved by Flan.
 
 ## Hard rules
 
@@ -52,7 +47,7 @@ M4 (archive and export) and later milestones are specified in `docs/SPEC.md`; do
 - Never log, print, commit or echo a token. Tests use throwaway tokens.
 - Policy changes (permissions, `@everyone`, agent addressing, visibility) need a test that fails without the change. Every bug fix gets a regression test.
 - Verify claims about Chatter or Herdr against Chatter's source or by running it. Do not guess. State what is verified and what is not.
-- Work on a branch per milestone (`m3-client`), commit in small steps, and do not push to `main` without Flan's go-ahead.
+- Work on a branch per milestone, commit in small steps. Flan (2026-10-13) leaves the timing of git events (branching, merging, pull, push) to the coordinator's judgment and wants old branches and worktrees cleaned up as work lands. The repo is public: scan for tokens and internal identifiers before a push, say what was pushed, and keep `main` green.
 - Stay in scope. v1.1 items (`/spawn`, `/team`, MCP adapter) are out.
 - Comments explain why, not what.
 
@@ -66,11 +61,12 @@ M4 (archive and export) and later milestones are specified in `docs/SPEC.md`; do
 
 ## Open items that need Flan (do not assume)
 
-- D11: the host may run two Herdr servers; which one should the bridge serve, and where is its Chatter state directory?
-- D9: MIT is assumed; not yet confirmed.
-- Whether "Prime Agent" (Grace's harness) is Qredence's fleet-prime-agent, and how it loads skills.
-- Delivery of messages into live agent panes is untested: it needs a real Herdr.
+- D11: which Herdr server and Chatter state directory the production bridge serves (the host may run two). Flan, 2026-10-13: any Herdr installed on any tailnet machine except `baremetalcyansociety` is a test installation and may be used for testing; never touch `baremetalcyansociety`'s Herdr. This laptop (`pop-os-laptop`) has Herdr and tmux.
+- D9: MIT is assumed; not yet confirmed (asked 2026-10-13, no answer yet).
+- Whether "Prime Agent" (Grace's harness) is Qredence's fleet-prime-agent, and how it loads skills (asked, no answer yet). Flan: Letta and Prime Agent harnesses manage their own context and can edit their own harness.
+- Delivery of messages into live agent panes is untested: it needs a real Herdr (the deploy-and-verify slice, on a test host with a throwaway state directory).
+- Which browsers members use (asked, no answer yet).
 
 ## First message to send in a new session
 
-> Read CLAUDE.md and docs/SPEC.md. Run the tests and confirm the baseline. Then write a short plan for M3 (tasks, files, test strategy) and wait for my go-ahead before writing code.
+> Read CLAUDE.md, docs/STATUS.md and docs/SPEC.md. Run the tests and confirm the baseline. Then tell me where we are (from STATUS and git) and what you would do next, and wait for my go-ahead before writing code.

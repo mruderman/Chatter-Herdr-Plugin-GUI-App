@@ -1,0 +1,7 @@
+{
+  "tests": ["src/api/error-codes.test.ts"],
+  "mutations": [
+    {"label": "the client's code list lacks ambiguous_recipient", "file": "src/api/errors.ts",
+     "pairs": [["  ambiguousRecipient: 'ambiguous_recipient',\n", ""]]}
+  ]
+}

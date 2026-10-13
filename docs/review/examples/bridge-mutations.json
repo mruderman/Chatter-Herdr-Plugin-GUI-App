@@ -1,0 +1,4 @@
+[
+  {"label": "mentionsOf drops Chatter's case-sensitive reading", "file": "bridge/src/util.js",
+   "pairs": [["  for (const m of body.matchAll(/@([a-z0-9_-]+)/g)) take(m[1]);\n", ""]]}
+]
