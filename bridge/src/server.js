@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { makeAuthenticator } from './auth.js';
+import { credentialOf, makeAuthenticator, revokedCredentials } from './auth.js';
 import { canSee, boardTables, findWritten, maxMessageId, queryMessages, rowsAfter, shape } from './messages.js';
 import { DEFAULT_LIMITS, RateLimiter, checkWrite } from './policy.js';
 import { apiArea, createStatic } from './static.js';
@@ -7,6 +7,11 @@ import { HttpError } from './util.js';
 
 export const VERSION = '0.1.0';
 const MAX_JSON = 64 * 1024;
+/** The reasons a stream's `bye` event gives. */
+const BYE = { epoch: 'epoch', error: 'error', revoked: 'revoked', tokenRotated: 'token_rotated', client: 'client' };
+// For a non-admin, whatever made `chatter agents` fail: Chatter's stderr and a failed run's error can name
+// host paths (the node binary, a member's config directory), which are admin only, as in /v1/repos.
+const AGENTS_ERROR_FOR_MEMBERS = 'Chatter could not list agents';
 
 const intParam = (v, name) => {
   if (v === null || v === undefined || v === '') return null;
@@ -25,6 +30,20 @@ async function readJson(req) {
   }
   if (!size) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpError(400, 'bad_json', 'body is not valid JSON'); }
+}
+
+/**
+ * Whether a stream may carry anything, judged from the registry as it is now, which the API or the CLI in
+ * another process may have changed: its member is still active and, for a stream opened with a bearer
+ * token (`credential`, the token's SHA-256), that token is still one of the member's live tokens. A
+ * tailnet-identity stream has no token (`credential` null), so only its member's status counts.
+ * Returns the current member record, or the reason the stream must end.
+ */
+function standing(store, handle, credential) {
+  const member = store.getMember(handle);
+  if (!member || member.status !== 'active') return { reason: BYE.revoked };
+  if (credential !== null && !store.isCurrentToken(handle, credential)) return { reason: BYE.tokenRotated };
+  return { member };
 }
 
 /** One poller per repo, shared by every open stream on it. */
@@ -65,29 +84,34 @@ class Watcher {
 
   poke() { if (this.timer) this.tick(); }
 
+  /** Ends the streams that may no longer carry anything; every other stream sees its member's current role. */
+  refresh() {
+    for (const s of [...this.subs]) {
+      const { member, reason } = standing(this.bridge.store, s.member.handle, s.credential);
+      if (reason) s.close(reason);
+      else s.member = member;
+    }
+  }
+
   tick() {
-    const { host, store } = this.bridge;
+    const { host } = this.bridge;
     this.ticks += 1;
     try {
       if (host.epoch(this.repo) !== this.epoch) {
-        for (const s of [...this.subs]) s.close('epoch');
+        for (const s of [...this.subs]) s.close(BYE.epoch);
         return;
       }
-      const db = host.openRO(this.repo);
-      for (const row of rowsAfter(db, this.lastId, 500)) {
+      const rows = rowsAfter(host.openRO(this.repo), this.lastId, 500);
+      // Before any row goes out, so a demotion, a revocation or a rotation made since the last tick decides
+      // who sees it; idle streams are refreshed every fourth tick so that they still end in time.
+      if (rows.length || this.ticks % 4 === 0) this.refresh();
+      for (const row of rows) {
         this.lastId = row.id;
         for (const s of this.subs) s.deliver(row);
       }
-      if (this.ticks % 4 === 0) {
-        for (const s of [...this.subs]) {
-          const m = store.getMember(s.member.handle);
-          if (!m || m.status !== 'active') s.close('revoked');
-          else s.member = m;
-        }
-      }
       if (this.ticks % 30 === 0) for (const s of this.subs) s.ping();
     } catch (e) {
-      for (const s of [...this.subs]) s.close('error');
+      for (const s of [...this.subs]) s.close(BYE.error);
       this.bridge.log(`watcher ${this.repo.key}: ${e.message}`);
     }
   }
@@ -147,13 +171,26 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
   async function postMessage(member, key, body) {
     const repo = await host.repo(key);
     if (repo.orphan || !repo.repo_root) throw new HttpError(409, 'repo_unwritable', 'repo no longer exists on this host');
-    const members = activeHandles();
-    const decision = checkWrite({
-      member, to: body.to, body: body.body, agentNames: await host.agentNames(), memberHandles: members, limits,
-    });
+    // Reads the registry and the rosters together after its one await, so it decides on what they say now.
+    const decide = async () => {
+      const agentNames = await host.agentNames();
+      const current = store.getMember(member.handle);
+      if (!current || current.status !== 'active') throw revokedCredentials();
+      const members = activeHandles();
+      const decision = checkWrite({
+        member: current, to: body.to, body: body.body, agentNames, repoAgents: host.rosterNames(repo), memberHandles: members, limits,
+      });
+      return { decision, members };
+    };
+    // Refused here, a send answers at once and costs no rate-limit token.
+    await decide();
     limiter.take(member.handle);
 
     const result = await host.withLock(repo.key, async () => {
+      // The send may have waited here behind others while the admin revoked its sender or changed what they
+      // may do, or an agent joined: decide again, and write only what that decision allows. Nothing awaits
+      // between the decision and the spawn in `host.run`.
+      const { decision, members } = await decide();
       const db = host.openRO(repo);
       const before = maxMessageId(db);
       // `--queue` always follows the body, so a body that is literally "--queue" survives (see cmdSend).
@@ -165,8 +202,9 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
       }
       const to = decision.mode === 'post' ? '#chat' : decision.to;
       const id = findWritten(db, { afterId: before, from: member.handle, to, kind: decision.mode === 'post' ? 'post' : 'chat', body: decision.body });
-      return { id, stdout: r.stdout, stderr: r.stderr };
+      return { id, stdout: r.stdout, stderr: r.stderr, decision, members };
     });
+    const { decision, members } = result;
 
     const pushed = (/pushed to (.+)$/m.exec(result.stdout)?.[1] || '').split(', ').filter(Boolean);
     const warnings = result.stderr.split('\n').filter((l) => l.startsWith('warning: ')).map((l) => l.slice(9))
@@ -207,14 +245,20 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
         else agents_error = (r.stderr || '').trim().split('\n').pop() || `exit ${r.code}`;
       } catch (e) { agents_error = e.message; }
     }
+    if (agents_error !== null && member.role !== 'admin') agents_error = AGENTS_ERROR_FOR_MEMBERS;
     // Host paths are admin only, as in /v1/repos. The cache is shared across roles and `agents` may be the
     // cached array itself, so build new rows instead of deleting from them.
     if (member.role !== 'admin') agents = agents.map((row) => Object.fromEntries(Object.entries(row).filter(([k]) => MEMBER_AGENT_KEYS.has(k))));
     return { repo: repo.key, epoch: host.epoch(repo), agents, agents_error, ...out };
   }
 
-  async function openStream(member, key, req, res, q) {
+  async function openStream(doorMember, key, req, res, q) {
     const repo = await host.repo(key);
+    // The door checked the credential before that await, and the resume below replays a batch at once:
+    // judge it again now, as the watcher does before every batch.
+    const credential = credentialOf(req);
+    const { member } = standing(store, doorMember.handle, credential);
+    if (!member) throw revokedCredentials();
     const db = host.openRO(repo);
     const watcher = watcherFor(repo);
     const last = req.headers['last-event-id'] ?? q.get('after_id');
@@ -227,6 +271,9 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
     if (!watcher.timer) watcher.start();
     const sub = {
       member,
+      // The SHA-256 of the bearer token this stream was opened with, or null for the tailnet identity: the
+      // watcher ends the stream once it is no longer a live token of the member, whichever process rotated it.
+      credential,
       lastSent: afterId ?? watcher.lastId,
       deliver(row) {
         if (row.id <= this.lastSent || !canSee(this.member, row)) return;
@@ -260,7 +307,7 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
     res.write(`event: hello\ndata: ${JSON.stringify({ epoch: host.epoch(repo), max_id: watcher.lastId })}\n\n`);
     if (!streams.has(member.handle)) streams.set(member.handle, new Set());
     streams.get(member.handle).add(sub);
-    req.on('close', () => sub.close('client'));
+    req.on('close', () => sub.close(BYE.client));
   }
 
   // ---------------------------------------------------------- admin routes
@@ -269,14 +316,18 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
       throw new HttpError(409, 'handle_is_agent', `"${body.handle}" is already a Herdr agent name`);
     }
     const kind = body.kind;
-    const m = store.addMember({
-      handle: body.handle, display_name: body.display_name, kind, role: body.role || 'member',
-      can_address_agents: body.can_address_agents !== false, tailscale_login: body.tailscale_login || null,
+    // One transaction with its audit entry, so a 500 means no member and no token exist. The config
+    // directory is made after the store has checked the handle; one left behind by a rollback is harmless.
+    return store.transaction(() => {
+      const m = store.addMember({
+        handle: body.handle, display_name: body.display_name, kind, role: body.role || 'member',
+        can_address_agents: body.can_address_agents !== false, tailscale_login: body.tailscale_login || null,
+      });
+      host.ensureMemberConfig(m.handle);
+      const token = kind === 'computational' || body.issue_token ? store.issueToken(m.handle) : null;
+      store.audit({ actor: admin.handle, action: 'member_add', target: m.handle, detail: { kind: m.kind, role: m.role, can_address_agents: m.can_address_agents } });
+      return { member: m, token };
     });
-    host.ensureMemberConfig(m.handle);
-    const token = kind === 'computational' || body.issue_token ? store.issueToken(m.handle) : null;
-    store.audit({ actor: admin.handle, action: 'member_add', target: m.handle, detail: { kind: m.kind, role: m.role, can_address_agents: m.can_address_agents } });
-    return { member: m, token };
   }
 
   async function route(req, res, url) {
@@ -327,24 +378,37 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
       if (seg.length === 2 && method === 'GET') return send(res, 200, { members: store.listMembers() });
       if (seg.length === 2 && method === 'POST') return send(res, 201, await addMember(member, await readJson(req)));
       const handle = seg[2];
+      // Each change below and its audit entry are one transaction, and open streams close only after the
+      // commit: a 500 then means nothing happened.
       if (seg.length === 3 && method === 'PATCH') {
         const body = await readJson(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'bad_request', 'body must be a JSON object');
         const patch = {};
         for (const k of ['display_name', 'kind', 'role', 'can_address_agents', 'tailscale_login']) if (k in body) patch[k] = body[k];
-        const m = store.updateMember(handle, patch);
-        store.audit({ actor: member.handle, action: 'member_update', target: handle, detail: patch });
+        const m = store.transaction(() => {
+          const updated = store.updateMember(handle, patch);
+          // What was stored, after the store's normalising, not what was sent.
+          store.audit({ actor: member.handle, action: 'member_update', target: handle, detail: Object.fromEntries(Object.keys(patch).map((k) => [k, updated[k]])) });
+          return updated;
+        });
         return send(res, 200, { member: m });
       }
       if (seg.length === 3 && method === 'DELETE') {
-        const m = store.revokeMember(handle);
-        closeStreamsFor(handle, 'revoked');
-        store.audit({ actor: member.handle, action: 'member_revoke', target: handle });
+        const m = store.transaction(() => {
+          const revoked = store.revokeMember(handle);
+          store.audit({ actor: member.handle, action: 'member_revoke', target: handle });
+          return revoked;
+        });
+        closeStreamsFor(handle, BYE.revoked);
         return send(res, 200, { member: m });
       }
       if (seg.length === 4 && seg[3] === 'token' && method === 'POST') {
-        const token = store.issueToken(handle);
-        closeStreamsFor(handle, 'token_rotated');
-        store.audit({ actor: member.handle, action: 'token_rotate', target: handle });
+        const token = store.transaction(() => {
+          const issued = store.issueToken(handle);
+          store.audit({ actor: member.handle, action: 'token_rotate', target: handle });
+          return issued;
+        });
+        closeStreamsFor(handle, BYE.tokenRotated);
         return send(res, 201, { token });
       }
     }

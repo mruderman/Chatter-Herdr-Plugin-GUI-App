@@ -9,7 +9,7 @@ import { mentionsOf, chatterTime } from '../src/util.js';
 
 const member = (o = {}) => ({ handle: 'thom', role: 'member', can_address_agents: true, ...o });
 const admin = member({ handle: 'flan', role: 'admin' });
-const ctx = { agentNames: new Set(['codex', 'pi']), memberHandles: new Set(['flan', 'thom', 'grace']) };
+const ctx = { agentNames: new Set(['codex', 'pi']), repoAgents: [], memberHandles: new Set(['flan', 'thom', 'grace']) };
 const refused = (fn, code) => assert.throws(fn, (e) => e.code === code, `expected ${code}`);
 
 test('mentionsOf follows Chatter grammar and finds @everyone case-insensitively', () => {
@@ -38,6 +38,28 @@ test('policy: addressing agents follows the member flag; admin always may', () =
   assert.equal(checkWrite({ member: { ...admin, can_address_agents: false }, to: 'pi', body: 'x', ...ctx }).toAgent, true);
   // a member with the flag off may still talk to other members
   assert.equal(checkWrite({ member: off, to: 'grace', body: 'hello', ...ctx }).toMember, true);
+});
+
+// T13 item 3. Chatter resolves a name it does not know exactly to the one roster name it begins (case-insensitive).
+test('policy: a name that begins a live agent name of the repo counts as that agent, fail closed', () => {
+  const p = {
+    agentNames: new Set(['codex-worker', 'grace-worker', 'old']),
+    memberHandles: new Set(['flan', 'thom', 'grace', 'zed', 'zedd']),
+    repoAgents: ['codex-worker', 'grace-worker'],
+  };
+  const off = member({ can_address_agents: false });
+  for (const body of ['@codex', '@CODEX-w', 'ping @grace', '@codex-worker']) {
+    refused(() => checkWrite({ member: off, to: '#chat', body, ...p }), 'agents_not_allowed');
+  }
+  // "old" is an agent name, but not of a live agent of this repo: only an exact match counts for it.
+  assert.equal(checkWrite({ member: off, to: '#chat', body: '@zed @old-ish', ...p }).mode, 'post');
+  refused(() => checkWrite({ member: off, to: '#chat', body: '@old', ...p }), 'agents_not_allowed');
+  assert.deepEqual(checkWrite({ member: member(), to: '#chat', body: 'hi @codex @zed', ...p }).agentTargets, ['codex']);
+  for (const who of [member(), admin]) refused(() => checkWrite({ member: who, to: 'grace', body: 'x', ...p }), 'ambiguous_recipient');
+  refused(() => checkWrite({ member: member({ handle: 'zedd' }), to: 'zed', body: 'x', ...p }), 'ambiguous_recipient');
+  assert.equal(checkWrite({ member: member({ handle: 'zed' }), to: 'zedd', body: 'x', ...p }).to, 'zedd');
+  assert.equal(checkWrite({ member: member(), to: 'zed', body: 'x', ...p }).toMember, true);
+  assert.equal(checkWrite({ member: member(), to: 'codex-worker', body: 'x', ...p }).toAgent, true);
 });
 
 test('policy: DM recipients and body limits', () => {

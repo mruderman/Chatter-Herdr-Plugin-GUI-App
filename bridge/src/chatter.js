@@ -164,6 +164,14 @@ export class ChatterHost {
     return names;
   }
 
+  /**
+   * The registered, non-departed agent names of one repo: the roster Chatter's `resolveRecipient` matches a
+   * recipient or a mention against, by exact name and then by unique case-insensitive prefix.
+   */
+  rosterNames(repo) {
+    return this.openRO(repo).prepare('SELECT name FROM agents WHERE departed_at IS NULL').all().map((r) => r.name);
+  }
+
   close() {
     for (const { db } of this._dbs.values()) { try { db.close(); } catch { /* ignore */ } }
     this._dbs.clear();

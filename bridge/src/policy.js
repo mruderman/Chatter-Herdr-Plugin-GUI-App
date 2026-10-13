@@ -1,16 +1,20 @@
 import { HttpError, mentionsOf } from './util.js';
 
 export const DEFAULT_LIMITS = { maxBody: 8000, postsPerMinute: 20 };
+const AMBIGUOUS_RECIPIENT = 'ambiguous_recipient';
 
 /**
  * Decide whether `member` may send `body` to `to` ("#chat" or a handle).
- * Pure: the caller supplies who counts as a Herdr agent and who as a member.
+ * Pure: the caller supplies who counts as a Herdr agent (`agentNames`: every repo, live or departed),
+ * the target repo's roster of non-departed agents (`repoAgents`) and who counts as a member.
  * Throws HttpError on refusal; nothing is written by the caller in that case.
  *
  * Chatter itself trusts any caller outside a pane as the human, so these
  * checks are the only thing standing between a member and "@everyone".
  */
-export function checkWrite({ member, to, body, agentNames, memberHandles, limits = DEFAULT_LIMITS }) {
+export function checkWrite({ member, to, body, agentNames, repoAgents, memberHandles, limits = DEFAULT_LIMITS }) {
+  // Required, not defaulted: a caller that forgot the roster would switch the prefix rule below off.
+  if (!Array.isArray(repoAgents)) throw new TypeError('checkWrite needs the repo roster (repoAgents)');
   if (typeof to !== 'string' || !to) throw new HttpError(400, 'bad_request', '"to" must be "#chat" or a handle');
   if (typeof body !== 'string') throw new HttpError(400, 'bad_request', '"body" must be a string');
   const text = body.trim();
@@ -21,14 +25,23 @@ export function checkWrite({ member, to, body, agentNames, memberHandles, limits
   }
   const admin = member.role === 'admin';
   const { handles, everyone } = mentionsOf(text);
+  // Chatter's `resolveRecipient` (behind both `send` and the mentions of `post`) takes a name it does not
+  // know exactly as the one roster name it is a case-insensitive prefix of, so such a name reaches that
+  // agent. Every name that begins a roster name counts as an agent here, even where Chatter would find
+  // several and pick none: fail closed.
+  const agentsBegunBy = (h) => repoAgents.filter((n) => n.toLowerCase().startsWith(h.toLowerCase()));
+  const agentLike = (h) => agentNames.has(h) || agentsBegunBy(h).length > 0;
 
   if (to === '#chat') {
     if (everyone && !admin) {
       throw new HttpError(403, 'everyone_admin_only', '@everyone is reserved for the admin; nothing was posted');
     }
-    const agents = handles.filter((h) => agentNames.has(h));
+    const agents = handles.filter(agentLike);
     if (agents.length && !admin && !member.can_address_agents) {
-      throw new HttpError(403, 'agents_not_allowed', 'you may not address Herdr agents; nothing was posted');
+      const byPrefix = agents.find((h) => !agentNames.has(h));
+      throw new HttpError(403, 'agents_not_allowed', byPrefix
+        ? `@${byPrefix} begins the name of the Herdr agent ${agentsBegunBy(byPrefix).join(', ')}, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`
+        : 'you may not address Herdr agents; nothing was posted');
     }
     return {
       mode: 'post',
@@ -45,6 +58,17 @@ export function checkWrite({ member, to, body, agentNames, memberHandles, limits
   if (!toAgent && !toMember) throw new HttpError(404, 'unknown_recipient', `no agent or member named "${to}"`);
   if (toAgent && !admin && !member.can_address_agents) {
     throw new HttpError(403, 'agents_not_allowed', 'you may not message Herdr agents');
+  }
+  if (!toAgent) {
+    // A private message must never reach an agent or come back to its sender, so admins are refused too.
+    const agents = agentsBegunBy(to);
+    if (agents.length) {
+      throw new HttpError(409, AMBIGUOUS_RECIPIENT, `"${to}" begins the name of the Herdr agent ${agents.join(', ')}, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`);
+    }
+    // Chatter also counts the sender's own name, so it would take this handle for the sender.
+    if (member.handle.toLowerCase().startsWith(to.toLowerCase())) {
+      throw new HttpError(409, AMBIGUOUS_RECIPIENT, `"${to}" begins your own handle, so Chatter would take it for you; nothing was sent. ${to} can still message you, or an admin can rename one of you.`);
+    }
   }
   return { mode: 'dm', body: text, to, toAgent, toMember, agentTargets: toAgent ? [to] : [], memberTargets: toMember ? [to] : [], everyone: false };
 }

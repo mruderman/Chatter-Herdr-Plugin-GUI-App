@@ -274,7 +274,8 @@ describe('bridge against Chatter CLI', { skip: !haveChatter && 'set CHATTER_JS t
     } finally { await x.stop(); }
   });
 
-  test('board agents_error is the same for a member and an admin', async () => {
+  // T13 item 4: Chatter's stderr and a failed run's error can name host paths, so a member gets a fixed message.
+  test('board agents_error: a member gets a fixed message, an admin the detail', async () => {
     const x = await makeEnv();
     try {
       x.addMember('grace');
@@ -288,11 +289,11 @@ describe('bridge against Chatter CLI', { skip: !haveChatter && 'set CHATTER_JS t
       ];
       for (const [name, stub, message] of cases) {
         fail = stub;
-        for (const who of ['grace', 'flan']) {
+        for (const [who, expected] of [['grace', 'Chatter could not list agents'], ['flan', message]]) {
           const r = await x.api(who, 'GET', `/v1/repos/${x.key}/board`);
           assert.equal(r.status, 200, `${name} as ${who}`);
           assert.deepEqual(r.body.agents, [], `${name} as ${who}`);
-          assert.equal(r.body.agents_error, message, `${name} as ${who}`);
+          assert.equal(r.body.agents_error, expected, `${name} as ${who}`);
         }
       }
     } finally { await x.stop(); }

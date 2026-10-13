@@ -1,7 +1,24 @@
 import { spawn } from 'node:child_process';
-import { HttpError } from './util.js';
+import { HttpError, sha256 } from './util.js';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const BEARER = /^Bearer\s+(\S+)$/i;
+
+// The one parser of the Authorization header: if a stream read it differently from the door, a stream
+// opened with a token could be taken for a tailnet one and never end at a rotation.
+const bearerToken = (req) => BEARER.exec(req.headers.authorization || '')?.[1] ?? null;
+
+/**
+ * What a stream keeps to recognise the credential it was opened with: the token's SHA-256, which the store
+ * already keeps, never the token. Null for the tailnet identity, which has no token to rotate.
+ */
+export function credentialOf(req) {
+  const token = bearerToken(req);
+  return token === null ? null : sha256(token);
+}
+
+/** What a member whose token is invalid or revoked is told, at the door and wherever it is checked again. */
+export const revokedCredentials = () => new HttpError(401, 'bad_token', 'token is invalid or revoked');
 
 /** Default whois: ask the local Tailscale daemon who owns an address. */
 export function tailscaleWhois(ip, cmd = ['tailscale', 'whois', '--json']) {
@@ -36,11 +53,10 @@ export function makeAuthenticator({ store, trustTailscale = false, whois = tails
   };
 
   return async function identify(req) {
-    const auth = req.headers.authorization || '';
-    const m = /^Bearer\s+(\S+)$/i.exec(auth);
-    if (m) {
-      const member = store.memberByToken(m[1]);
-      if (!member) throw new HttpError(401, 'bad_token', 'token is invalid or revoked');
+    const token = bearerToken(req);
+    if (token !== null) {
+      const member = store.memberByToken(token);
+      if (!member) throw revokedCredentials();
       store.touch(member.handle);
       return member;
     }

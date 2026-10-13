@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS reads (
 );
 `;
 
+// The table's CHECK constraints refuse anything else, but as a bare 500; these say why first.
+function checkKind(kind) {
+  if (!['human', 'computational'].includes(kind)) throw new HttpError(400, 'bad_kind', 'kind must be human or computational');
+}
+function checkRole(role) {
+  if (!['admin', 'member'].includes(role)) throw new HttpError(400, 'bad_role', 'role must be admin or member');
+}
+
 const toMember = (r) => (r ? ({
   handle: r.handle,
   display_name: r.display_name,
@@ -62,14 +70,31 @@ export class Store {
 
   close() { this.db.close(); }
 
+  /**
+   * Runs `fn`, which must be synchronous, as one transaction: everything it writes lands, or nothing does.
+   * IMMEDIATE takes the write lock up front, so the CLI in another process waits (busy_timeout) instead of
+   * failing the commit halfway.
+   */
+  transaction(fn) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const out = fn();
+      this.db.exec('COMMIT');
+      return out;
+    } catch (e) {
+      try { this.db.exec('ROLLBACK'); } catch { /* the failure already ended the transaction */ }
+      throw e;
+    }
+  }
+
   // ------------------------------------------------------------- members
   addMember({ handle, display_name, kind, role = 'member', can_address_agents = true, tailscale_login = null }) {
     if (!HANDLE_RE.test(handle || '')) {
       throw new HttpError(400, 'bad_handle', 'handle must be 1-32 chars of a-z, 0-9, _ or -, starting with a letter or digit');
     }
     if (handle === 'everyone') throw new HttpError(400, 'bad_handle', '"everyone" is reserved');
-    if (!['human', 'computational'].includes(kind)) throw new HttpError(400, 'bad_kind', 'kind must be human or computational');
-    if (!['admin', 'member'].includes(role)) throw new HttpError(400, 'bad_role', 'role must be admin or member');
+    checkKind(kind);
+    checkRole(role);
     if (this.getMember(handle)) throw new HttpError(409, 'handle_taken', `member "${handle}" already exists`);
     if (tailscale_login && this.memberByLogin(tailscale_login)) {
       throw new HttpError(409, 'login_taken', 'that Tailscale login is already mapped to a member');
@@ -96,10 +121,31 @@ export class Store {
     return this.db.prepare("SELECT COUNT(*) AS n FROM members WHERE role = 'admin' AND status = 'active'").get().n;
   }
 
+  // Checked as addMember checks, and normalised as the admin panel does, so a refusal is a 4xx that writes nothing.
   updateMember(handle, patch) {
     const m = this.getMember(handle);
     if (!m) throw new HttpError(404, 'no_such_member', `no member "${handle}"`);
+    if (!Object.keys(patch).length) throw new HttpError(400, 'bad_request', 'nothing to change');
     const next = { ...m, ...patch };
+    if ('display_name' in patch) {
+      if (typeof patch.display_name !== 'string' || !patch.display_name.trim()) {
+        throw new HttpError(400, 'bad_request', 'display name must not be empty');
+      }
+      next.display_name = patch.display_name.trim();
+    }
+    if ('tailscale_login' in patch) {
+      if (patch.tailscale_login !== null && typeof patch.tailscale_login !== 'string') {
+        throw new HttpError(400, 'bad_request', 'tailscale_login must be a string or null');
+      }
+      // An empty login means "none"; stored as "" it would be a login of its own, and UNIQUE.
+      next.tailscale_login = patch.tailscale_login?.trim() || null;
+    }
+    checkKind(next.kind);
+    checkRole(next.role);
+    const holder = next.tailscale_login ? this.memberByLogin(next.tailscale_login) : null;
+    if (holder && holder.handle !== handle) {
+      throw new HttpError(409, 'login_taken', 'that Tailscale login is already mapped to a member');
+    }
     if (patch.role && patch.role !== m.role && m.role === 'admin' && this.countAdmins() <= 1) {
       throw new HttpError(409, 'last_admin', 'cannot demote the last admin');
     }
@@ -146,6 +192,11 @@ export class Store {
        WHERE t.token_hash = ? AND t.revoked_at IS NULL AND m.status = 'active'`,
     ).get(sha256(token));
     return toMember(row);
+  }
+
+  /** Whether `hash` (a token's SHA-256) is still a live token of `handle`; a rotation by any process ends it. */
+  isCurrentToken(handle, hash) {
+    return !!this.db.prepare('SELECT 1 AS live FROM tokens WHERE token_hash = ? AND handle = ? AND revoked_at IS NULL').get(hash, handle);
   }
 
   // --------------------------------------------------------------- audit
