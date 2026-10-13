@@ -1,7 +1,8 @@
 // A scripted bridge for the real store's tests, answering through the same `Api` interface that
 // createApi implements (src/api/client.ts). Its database is the recordings in client/test/fixtures,
 // and it keeps the bridge's rules: who sees what (bridge/src/messages.js canSee), paging
-// (queryMessages), refusals in checkWrite's order with the recorded texts (bridge/src/policy.js), a
+// (queryMessages), refusals in checkWrite's order with the bridge's texts (bridge/src/policy.js, kept in
+// fake.ts and shared with the fake store, so there is one copy of those rules to check), a
 // read pointer that only moves forward (store.js setRead), and the stream's replay after
 // Last-Event-ID, then hello, then live rows (server.js openStream). Tests drive what a real bridge
 // does on its own: someone else writes, the member is revoked, the token rotates, the repo is
@@ -23,7 +24,7 @@ import {
   type SendResult,
 } from '../api/types';
 import { body, recordedError } from '../../test/fixtures/recorded';
-import { FAKE_MEMBERS, type FakeMember } from './fake';
+import { FAKE_MEMBERS, mentionsOf, refuseWrite, type FakeMember } from './fake';
 
 export const BRIDGE_ROUTES = {
   me: 'me',
@@ -82,16 +83,13 @@ export const MAIN_REPO = MAIN_PAGE.repo;
 /** The second recorded repo: one #chat post. */
 export const SITE_REPO = SITE_PAGE.repo;
 
-// bridge/src/messages.js queryMessages and bridge/src/policy.js DEFAULT_LIMITS.
+// bridge/src/messages.js queryMessages. The write limits are in fake.ts, with the rules that use them.
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
-const MAX_BODY = 8_000;
 const KIND_POST = 'post';
 const KIND_DM = 'chat';
 const KIND_MENTION = 'mention';
 const ROLE_ADMIN = 'admin';
-const EVERYONE = 'everyone';
-const NUL_MESSAGE = 'message contains a NUL byte';
 const NOT_REGISTERED_MESSAGE = 'your Tailscale login is not registered as a member';
 const NETWORK_MESSAGE = 'could not reach the bridge';
 const RETRY_FIELD = 'retry: 2000\n\n';
@@ -131,18 +129,6 @@ function recordedNames(handle: string): (typeof FAKE_MEMBERS)[FakeMember] | unde
 function refusal(name: string): ApiError {
   const { status, code, message } = recordedError(name);
   return new ApiError(status, code, message);
-}
-
-/** bridge/src/util.js mentionsOf. */
-function mentionsOf(text: string): { handles: string[]; everyone: boolean } {
-  const handles = new Set<string>();
-  let everyone = false;
-  for (const match of text.matchAll(/@([a-z0-9_-]+)/gi)) {
-    const name = (match[1] ?? '').toLowerCase();
-    if (name === EVERYONE) everyone = true;
-    else handles.add(name);
-  }
-  return { handles: [...handles], everyone };
 }
 
 /** bridge/src/messages.js canSee. */
@@ -471,33 +457,21 @@ export class FakeBridge {
     return { repo, epoch: table.epoch, messages: rows.map((row) => ({ ...row, mentions: [...row.mentions] })), has_more: hasMore, max_id: table.maxId };
   }
 
-  /** bridge/src/policy.js checkWrite, in its order, then the write. */
+  /** bridge/src/policy.js checkWrite (the rules are fake.ts's refuseWrite, on the directory served now), then the write. */
   private accept(member: Me, repo: string, draft: SendRequest): SendResult {
     this.table(repo);
-    if (!draft.to) throw refusal('post-missing-to');
+    const refused = refuseWrite(draft, member, this.served);
+    if (refused) throw new ApiError(refused.status, refused.code, refused.message);
     const text = draft.body.trim();
-    if (!text) throw refusal('post-empty');
-    if (text.includes('\0')) throw new ApiError(400, ERROR_CODES.invalidBody, NUL_MESSAGE);
-    if (text.length > MAX_BODY) throw refusal('post-too-long');
-    const admin = member.role === ROLE_ADMIN;
-    const { handles, everyone } = mentionsOf(text);
-    const agents = new Set(this.served.agents);
+    const { handles } = mentionsOf(text);
     const members = new Set(this.served.members.map((m) => m.handle));
     let mentioned: string[];
     let delivery: SendResult['delivery'] = null;
     if (draft.to === CHANNEL) {
-      if (everyone && !admin) throw refusal('post-everyone-member');
-      if (!admin && !member.can_address_agents && handles.some((h) => agents.has(h))) throw refusal('post-agents-not-allowed');
       mentioned = handles.filter((h) => members.has(h) && h !== member.handle);
     } else {
-      if (draft.to === member.handle) throw refusal('post-self-dm');
-      const toAgent = agents.has(draft.to);
-      if (!toAgent && !members.has(draft.to)) {
-        throw new ApiError(404, ERROR_CODES.unknownRecipient, `no agent or member named "${draft.to}"`);
-      }
-      if (toAgent && !admin && !member.can_address_agents) throw refusal('post-dm-agent-not-allowed');
       mentioned = members.has(draft.to) ? [draft.to] : [];
-      if (toAgent) delivery = 'queued';
+      if (this.served.agents.includes(draft.to)) delivery = 'queued';
     }
     const written = this.write({ from: member.handle, to: draft.to, body: text, repo });
     return { id: this.sendIdNull ? null : written.id, pushed: [], warnings: [], mentioned_members: mentioned, delivery };

@@ -122,6 +122,10 @@ const realDriver: MakeDriver = async (options = {}) => {
 };
 
 const recordedPage = (who: string): readonly Message[] => parseMessagesPage(body(`messages-${who}`)).messages;
+// bridge/src/policy.js, checkWrite, worded for the recorded directory's one agent, "codex".
+const PREFIX_MENTION = (handle: string): string => `@${handle} begins the name of the Herdr agent codex, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`;
+const DM_BEGINS_AN_AGENT = (handle: string): string => `"${handle}" begins the name of the Herdr agent codex, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`;
+const DM_BEGINS_OWN_HANDLE = (handle: string): string => `"${handle}" begins your own handle, so Chatter would take it for you; nothing was sent. ${handle} can still message you, or an admin can rename one of you.`;
 const refusal = (name: string) => {
   const { code, message } = recordedError(name);
   return { code, message };
@@ -343,6 +347,72 @@ describe.each([
       expect(d.written()).toBe(0);
     });
 
+    // bridge/src/util.js mentionsOf: every mention is read as Chatter reads it and then whole, lower-cased.
+    it.each([
+      ['@everyoneX', ['everyonex'], true],
+      ['@Everyone', [], true],
+      ['@codX', ['cod', 'codx'], false],
+      ['@gracE and @codX', ['grac', 'cod', 'grace', 'codx'], false],
+      ['hi @codex-workerZ', ['codex-worker', 'codex-workerz'], false],
+    ] as const)('reads the mentions of an arriving message %j as %j, everyone %s', async (text, handles, everyone) => {
+      const d = await make();
+      const message = await d.receive({ from: 'mira', body: text });
+      expect(message.mentions).toEqual(handles);
+      expect(message.everyone).toBe(everyone);
+    });
+
+    it.each([
+      ['kieran', '@cod please', { code: 'agents_not_allowed', message: PREFIX_MENTION('cod') }],
+      ['kieran', '@codX please', { code: 'agents_not_allowed', message: PREFIX_MENTION('cod') }],
+      ['kieran', '@CODEX please', refusal('post-agents-not-allowed')],
+      ['thom', '@everyoneX hi', refusal('post-everyone-member')],
+      ['thom', 'mail a@everyone', refusal('post-everyone-member')],
+      ['kieran', '@cod @everyone', refusal('post-everyone-member')],
+    ] as const)('refuses %s sending %j as the bridge does, and writes nothing', async (as, text, expected) => {
+      const d = await make({ as });
+      expect(await d.store.send({ to: CHANNEL, body: text })).toBe(false);
+      expect(d.now().sendError).toEqual(expected);
+      expect(d.written()).toBe(0);
+    });
+
+    it('lets a member who may address agents mention one by the start of its name, and the admin post an @everyone that Chatter ends at a capital letter', async () => {
+      const thom = await make({ as: 'thom' });
+      expect(await thom.store.send({ to: CHANNEL, body: '@cod hello' })).toBe(true);
+      expect(thom.now().messages.at(-1)).toMatchObject({ mentions: ['cod'], everyone: false });
+      const flan = await make({ as: 'flan' });
+      expect(await flan.store.send({ to: CHANNEL, body: '@everyoneX standup' })).toBe(true);
+      expect(flan.now().messages.at(-1)).toMatchObject({ mentions: ['everyonex'], everyone: true });
+    });
+
+    // The recorded directory has no member that an agent's name or a sender's handle begins with, so the
+    // admin panel adds one and the store takes it up with a refresh.
+    const withMembers = async (d: Driver, ...handles: string[]): Promise<void> => {
+      const { members, agents } = parseDirectory(body('directory'));
+      d.setDirectory({ members: [...members, ...handles.map((handle) => ({ handle, display_name: handle, kind: 'human' as const }))], agents });
+      await d.store.refreshDirectory();
+      await d.settle();
+    };
+
+    it.each(['kieran', 'thom', 'flan'] as const)('refuses %s a direct message to a member whose handle begins the name of an agent, with the bridge\'s ambiguous_recipient, and writes nothing', async (as) => {
+      const d = await make({ as });
+      await withMembers(d, 'cod');
+      expect(await d.store.send({ to: 'cod', body: 'for cod, not for codex' })).toBe(false);
+      expect(d.now().sendError).toEqual({ code: 'ambiguous_recipient', message: DM_BEGINS_AN_AGENT('cod') });
+      expect(d.written()).toBe(0);
+    });
+
+    it.each([
+      ['kieran', 'kier'],
+      ['thom', 'tho'],
+      ['flan', 'fla'],
+    ] as const)('refuses %s a direct message to %s, a proper prefix of the sender\'s own handle, and writes nothing', async (as, prefix) => {
+      const d = await make({ as });
+      await withMembers(d, prefix);
+      expect(await d.store.send({ to: prefix, body: 'hello?' })).toBe(false);
+      expect(d.now().sendError).toEqual({ code: 'ambiguous_recipient', message: DM_BEGINS_OWN_HANDLE(prefix) });
+      expect(d.written()).toBe(0);
+    });
+
     it('refuses a NUL with the bridge\'s code', async () => {
       const d = await make();
       expect(await d.store.send({ to: CHANNEL, body: 'a\u0000b' })).toBe(false);
@@ -363,7 +433,8 @@ describe.each([
       const maxId = parseMessagesPage(body('messages-thom')).max_id;
       expect(d.now().messages.at(-1)).toEqual({
         id: maxId + 1, from: 'thom', to: CHANNEL, body: 'hi @Mira and @grace', kind: 'post', ref_id: null,
-        created_at: '2026-10-10T12:00:00Z', mentions: ['mira', 'grace'], everyone: false,
+        // Read as Chatter reads it (a capital letter ends the token) and then whole: "grace" first.
+        created_at: '2026-10-10T12:00:00Z', mentions: ['grace', 'mira'], everyone: false,
       });
       expect(d.now().sendError).toBeNull();
       expect(d.written()).toBe(1);

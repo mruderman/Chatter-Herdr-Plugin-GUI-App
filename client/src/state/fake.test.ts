@@ -263,7 +263,9 @@ describe('fake store: sending, refused the way the bridge refuses', () => {
     const maxId = parseMessagesPage(body('messages-thom')).max_id;
     expect(sent).toEqual({
       id: maxId + 1, from: 'thom', to: CHANNEL, body: 'hi @Mira and @grace', kind: 'post', ref_id: null,
-      created_at: '2026-10-10T12:00:00Z', mentions: ['mira', 'grace'], everyone: false,
+      // The bridge reads "@Mira" twice, as Chatter does (a capital letter ends the token, so nothing) and
+      // whole: its lower-cased "mira" comes after "grace", which the first reading already found.
+      created_at: '2026-10-10T12:00:00Z', mentions: ['grace', 'mira'], everyone: false,
     });
     expect(f.now().sendError).toBeNull();
     expect(f.store.sent).toEqual([{ to: CHANNEL, body: '  hi @Mira and @grace  ' }]);
@@ -291,6 +293,178 @@ describe('fake store: sending, refused the way the bridge refuses', () => {
     const f = fake({ session: 'signed-out' });
     expect(await f.store.send({ to: CHANNEL, body: 'hi' })).toBe(false);
     expect(f.store.sent).toEqual([]);
+  });
+});
+
+// bridge/test/unit.test.js, mentionsOf: each mention is read twice, as Chatter's postToChat reads it
+// (`/@([a-z0-9_-]+)/g`, case-sensitive, so a capital letter ends the token) and then whole and
+// lower-cased. `everyone` is set when either reading gives exactly "everyone". Written out here, not
+// imported, so that a change in the bridge shows up as a difference in bridge-parity.test.ts.
+const READINGS = [
+  ['hi @codex and @Thom, @everyone', ['codex', 'thom'], true],
+  ['mail me at a@b.com', ['b'], false],
+  ['@everyone-ish', ['everyone-ish'], false],
+  ['@everyoneX', ['everyonex'], true],
+  ['@codX', ['cod', 'codx'], false],
+  ['hi @codex-workerZ', ['codex-worker', 'codex-workerz'], false],
+  ['@gracE and @codX', ['grac', 'cod', 'grace', 'codx'], false],
+  ['@everyoneX @thomX', ['thom', 'everyonex', 'thomx'], true],
+  ['@Everyone', [], true],
+  ['@EVERYONE', [], true],
+  ['a@everyone', [], true],
+  ['hey @Codex-worker', ['codex-worker'], false],
+  ['plain @codex @kai', ['codex', 'kai'], false],
+  ['nothing to see here', [], false],
+  ['hey @codéx', ['cod'], false],
+  ['ends with @cod', ['cod'], false],
+] as const;
+
+describe('fake store: mentions are read as the bridge reads them', () => {
+  it.each(READINGS)('reads %j as %j, everyone %s', (text, handles, everyone) => {
+    const message = fake().store.receive({ from: 'mira', body: text });
+    expect(message.mentions).toEqual(handles);
+    expect(message.everyone).toBe(everyone);
+  });
+
+  it('gives a message the member sends the same reading', async () => {
+    const f = fake({ as: 'flan' });
+    expect(await f.store.send({ to: CHANNEL, body: '@everyoneX @thomX' })).toBe(true);
+    expect(f.now().messages.at(-1)).toMatchObject({ mentions: ['thom', 'everyonex', 'thomx'], everyone: true });
+  });
+});
+
+// bridge/src/policy.js, checkWrite. The recorded directory has the agent "codex" and no member whose
+// handle begins it or is the start of another member's, so the tests add members the way the admin
+// panel would, and the fake takes them up on a refresh.
+async function withMembers(f: ReturnType<typeof fake>, ...handles: string[]): Promise<void> {
+  const { members, agents } = parseDirectory(body('directory'));
+  f.store.setDirectory({ members: [...members, ...handles.map((handle) => ({ handle, display_name: handle, kind: 'human' as const }))], agents });
+  await f.store.refreshDirectory();
+}
+
+const BEGINS_AN_AGENT_IN_POST = (handle: string): string => `@${handle} begins the name of the Herdr agent codex, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`;
+const BEGINS_AN_AGENT_IN_DM = (handle: string): string => `"${handle}" begins the name of the Herdr agent codex, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`;
+const BEGINS_OWN_HANDLE = (handle: string): string => `"${handle}" begins your own handle, so Chatter would take it for you; nothing was sent. ${handle} can still message you, or an admin can rename one of you.`;
+
+describe('fake store: addressing, decided as the bridge decides it', () => {
+  it.each([
+    ['@cod please', 'cod'],
+    ['@codX please', 'cod'],
+    ['@co please', 'co'],
+    ['@c', 'c'],
+    ['hi @Kieran and @cod', 'cod'],
+  ] as const)('refuses a member who may not address agents %j, as it begins the name of the agent codex', async (text, begun) => {
+    const f = fake({ as: 'kieran' });
+    expect(await f.store.send({ to: CHANNEL, body: text })).toBe(false);
+    expect(f.now().sendError).toEqual({ code: 'agents_not_allowed', message: BEGINS_AN_AGENT_IN_POST(begun) });
+    expect(f.store.sent).toEqual([]);
+  });
+
+  it('keeps the recorded refusal for the agent\'s exact name, however it is written', async () => {
+    for (const text of ['@codex hello', '@Codex hello', '@CODEX hello']) {
+      const f = fake({ as: 'kieran' });
+      expect(await f.store.send({ to: CHANNEL, body: text })).toBe(false);
+      expect(f.now().sendError).toEqual(refusal('post-agents-not-allowed'));
+    }
+  });
+
+  it('lets a member who may address agents, and the admin, mention one by the start of its name', async () => {
+    for (const as of ['thom', 'flan'] as const) {
+      const f = fake({ as });
+      expect(await f.store.send({ to: CHANNEL, body: '@cod hello' })).toBe(true);
+      expect(f.now().messages.at(-1)).toMatchObject({ mentions: ['cod'], everyone: false });
+    }
+  });
+
+  it('does not take a handle for an agent when it is not the start of any agent\'s name', async () => {
+    const f = fake({ as: 'kieran' });
+    expect(await f.store.send({ to: CHANNEL, body: 'hi @cdx and @codexy and @ezra' })).toBe(true);
+  });
+
+  it('compares the start of a name without regard to case, as Chatter does, and names the agent as the directory spells it', async () => {
+    const f = fake({ as: 'kieran' });
+    const { members } = parseDirectory(body('directory'));
+    f.store.setDirectory({ members: [...members, { handle: 'sage', display_name: 'Sage', kind: 'human' }], agents: ['Sage-Worker'] });
+    await f.store.refreshDirectory();
+    expect(await f.store.send({ to: CHANNEL, body: 'ask @sage' })).toBe(false);
+    expect(f.now().sendError).toEqual({
+      code: 'agents_not_allowed',
+      message: '@sage begins the name of the Herdr agent Sage-Worker, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted',
+    });
+    expect(await f.store.send({ to: 'sage', body: 'hello' })).toBe(false);
+    expect(f.now().sendError?.code).toBe('ambiguous_recipient');
+  });
+
+  it('lists every agent a name is the start of, in the directory\'s order', async () => {
+    const f = fake({ as: 'kieran' });
+    const { members } = parseDirectory(body('directory'));
+    f.store.setDirectory({ members, agents: ['ivy-one', 'ivy-two', 'pip'] });
+    await f.store.refreshDirectory();
+    expect(await f.store.send({ to: CHANNEL, body: 'ask @ivy' })).toBe(false);
+    expect(f.now().sendError?.message).toBe('@ivy begins the name of the Herdr agent ivy-one, ivy-two, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted');
+  });
+
+  it.each(['@everyone hi', '@Everyone hi', '@EVERYONE hi', '@everyoneX hi', 'mail a@everyone'])('refuses a member\'s %j as an @everyone', async (text) => {
+    const f = fake();
+    expect(await f.store.send({ to: CHANNEL, body: text })).toBe(false);
+    expect(f.now().sendError).toEqual(refusal('post-everyone-member'));
+    expect(f.store.sent).toEqual([]);
+  });
+
+  it('lets the admin post an @everyone that Chatter ends at a capital letter, and records it as one', async () => {
+    const f = fake({ as: 'flan' });
+    expect(await f.store.send({ to: CHANNEL, body: '@everyoneX standup' })).toBe(true);
+    expect(f.now().messages.at(-1)).toMatchObject({ everyone: true, mentions: ['everyonex'] });
+  });
+
+  it('checks @everyone before agents, as the bridge does', async () => {
+    const f = fake({ as: 'kieran' });
+    expect(await f.store.send({ to: CHANNEL, body: '@cod @everyone' })).toBe(false);
+    expect(f.now().sendError?.code).toBe('everyone_admin_only');
+  });
+
+  it.each(['kieran', 'thom', 'flan'] as const)('refuses %s a direct message to a member whose handle begins the name of an agent, with 409', async (as) => {
+    const f = fake({ as });
+    await withMembers(f, 'cod');
+    const before = f.now().messages;
+    expect(await f.store.send({ to: 'cod', body: 'for cod, not for codex' })).toBe(false);
+    expect(f.now().sendError).toEqual({ code: 'ambiguous_recipient', message: BEGINS_AN_AGENT_IN_DM('cod') });
+    expect(f.now().messages).toEqual(before);
+    expect(f.store.sent).toEqual([]);
+    expect(f.labels()).not.toContain('DM with cod');
+  });
+
+  it.each([
+    ['kieran', 'kier'],
+    ['thom', 'tho'],
+    ['flan', 'fla'],
+  ] as const)('refuses %s a direct message to %s, a proper prefix of the sender\'s own handle, with 409', async (as, prefix) => {
+    const f = fake({ as });
+    await withMembers(f, prefix);
+    expect(await f.store.send({ to: prefix, body: 'hello?' })).toBe(false);
+    expect(f.now().sendError).toEqual({ code: 'ambiguous_recipient', message: BEGINS_OWN_HANDLE(prefix) });
+    expect(f.store.sent).toEqual([]);
+  });
+
+  it('writes a direct message to a member no agent name and no sender handle begins with', async () => {
+    const f = fake({ as: 'kieran' });
+    await withMembers(f, 'zed');
+    expect(await f.store.send({ to: 'zed', body: 'for zed' })).toBe(true);
+    expect(f.labels()).toContain('DM with zed');
+  });
+
+  it('answers a direct message to the start of an agent\'s name that is no member with the recorded 404, not 409', async () => {
+    const f = fake();
+    expect(await f.store.send({ to: 'cod', body: 'hello?' })).toBe(false);
+    expect(f.now().sendError).toEqual({ code: 'unknown_recipient', message: 'no agent or member named "cod"' });
+  });
+
+  it('keeps the agent\'s exact name as a direct message the member may or may not send', async () => {
+    const restricted = fake({ as: 'kieran' });
+    expect(await restricted.store.send({ to: 'codex', body: 'hello' })).toBe(false);
+    expect(restricted.now().sendError).toEqual(refusal('post-dm-agent-not-allowed'));
+    const permitted = fake({ as: 'thom' });
+    expect(await permitted.store.send({ to: 'codex', body: 'hello' })).toBe(true);
   });
 });
 

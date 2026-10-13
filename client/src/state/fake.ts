@@ -1,7 +1,9 @@
 // A deterministic stand-in for the store (types.ts), seeded from the recordings in
 // client/test/fixtures, for view tests. It never touches the network. It refuses writes the way
 // the bridge does (bridge/src/policy.js, checkWrite: same order, same codes, the recorded
-// messages), so a view test shows exactly the refusal text a member would see. Not part of the app.
+// messages and the bridge's own words for the prefix rules), so a view test shows exactly the refusal
+// text a member would see. Its rules also serve the scripted bridge in fake-api.ts, and
+// bridge-parity.test.ts checks them against a real bridge. Not part of the app.
 import { ManualClock } from '../api/clock';
 import { ERROR_CODES } from '../api/errors';
 import { parseDirectory, parseMe, parseMessagesPage, parseRepos } from '../api/guards';
@@ -118,15 +120,23 @@ interface Pending {
 
 const CHANNEL_CONVERSATION: Conversation = { kind: 'channel', id: CHANNEL, label: CHANNEL };
 
-/** Same grammar as the bridge's mentionsOf (bridge/src/util.js), so mentions match a real message. */
-function mentionsOf(text: string): { handles: string[]; everyone: boolean } {
+/**
+ * The bridge's mentionsOf (bridge/src/util.js), so that the mentions of a message match a real one,
+ * in the same order. Every mention is read twice and both readings are kept: first as Chatter's
+ * postToChat reads it (`/@([a-z0-9_-]+)/g`, case-sensitive, so a capital letter ends the token and
+ * "@codX" is "@cod"), then whole, case-insensitive and lower-cased. `everyone` is set when either
+ * reading gives exactly "everyone". The scripted bridge (fake-api.ts) uses this function too: there
+ * is one copy of the bridge's rules here, and bridge-parity.test.ts compares it with the real one.
+ */
+export function mentionsOf(text: string): { handles: string[]; everyone: boolean } {
   const handles = new Set<string>();
   let everyone = false;
-  for (const match of text.matchAll(/@([a-z0-9_-]+)/gi)) {
-    const name = (match[1] ?? '').toLowerCase();
-    if (name === EVERYONE) everyone = true;
-    else handles.add(name);
-  }
+  const take = (token: string): void => {
+    if (token === EVERYONE) everyone = true;
+    else handles.add(token);
+  };
+  for (const match of text.matchAll(/@([a-z0-9_-]+)/g)) take(match[1] ?? '');
+  for (const match of text.matchAll(/@([a-z0-9_-]+)/gi)) take((match[1] ?? '').toLowerCase());
   return { handles: [...handles], everyone };
 }
 
@@ -160,32 +170,75 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-function recorded(name: string): ErrorInfo {
-  const { code, message } = recordedError(name);
-  return { code, message };
+/** What the bridge answers a refused write with: the HTTP status, its code and its words. */
+export interface Refusal {
+  readonly status: number;
+  readonly code: string;
+  readonly message: string;
 }
 
-/** The bridge's checkWrite, in its order. Null when the bridge would accept the draft. */
-function refusal(draft: SendDraft, me: Me, directory: Directory): ErrorInfo | null {
+function recorded(name: string): Refusal {
+  const { status, code, message } = recordedError(name);
+  return { status, code, message };
+}
+
+// Statuses of the refusals that no recording has: the ones the prefix rules add (bridge/src/policy.js).
+const STATUS = { badRequest: 400, forbidden: 403, notFound: 404, conflict: 409 } as const;
+
+// The bridge's words for the refusals the prefix rules add. The handle or the agent names are the only
+// parts that vary, so a view test shows the text a member would read.
+const ambiguity = {
+  mention: (handle: string, names: readonly string[]): string => `@${handle} begins the name of the Herdr agent ${names.join(', ')}, and Chatter could deliver it there; you may not address Herdr agents, so nothing was posted`,
+  dmToAgentName: (handle: string, names: readonly string[]): string => `"${handle}" begins the name of the Herdr agent ${names.join(', ')}, so Chatter could deliver this message to the agent instead; nothing was sent. An admin can rename the member or the agent.`,
+  dmToOwnHandle: (handle: string): string => `"${handle}" begins your own handle, so Chatter would take it for you; nothing was sent. ${handle} can still message you, or an admin can rename one of you.`,
+};
+
+/**
+ * The bridge's checkWrite (bridge/src/policy.js), in its order. Null when the bridge would accept the draft.
+ *
+ * Chatter takes a name it does not know exactly as the one agent whose name it begins (case-insensitive),
+ * so the bridge counts such a name as that agent. Its roster is the target repo's agents that have not
+ * departed; the directory, which is all the fake knows, lists every agent of every repo, departed ones
+ * too. So the fake agrees with the bridge wherever the roster and the directory agree, and the cases
+ * where they differ are listed in bridge-parity.test.ts.
+ */
+export function refuseWrite(draft: SendDraft, me: Me, directory: Directory): Refusal | null {
   if (!draft.to) return recorded('post-missing-to');
   const text = draft.body.trim();
   if (!text) return recorded('post-empty');
-  if (text.includes('\0')) return { code: ERROR_CODES.invalidBody, message: NUL_MESSAGE };
+  if (text.includes('\0')) return { status: STATUS.badRequest, code: ERROR_CODES.invalidBody, message: NUL_MESSAGE };
   if (text.length > MAX_BODY) return recorded('post-too-long');
   const admin = me.role === 'admin';
   const { handles, everyone } = mentionsOf(text);
   const agents = new Set(directory.agents);
+  const agentsBegunBy = (handle: string): string[] => directory.agents.filter((name) => name.toLowerCase().startsWith(handle.toLowerCase()));
+  const agentLike = (handle: string): boolean => agents.has(handle) || agentsBegunBy(handle).length > 0;
   if (draft.to === CHANNEL) {
     if (everyone && !admin) return recorded('post-everyone-member');
-    if (!admin && !me.can_address_agents && handles.some((handle) => agents.has(handle))) return recorded('post-agents-not-allowed');
+    const addressed = handles.filter(agentLike);
+    if (addressed.length > 0 && !admin && !me.can_address_agents) {
+      const byPrefix = addressed.find((handle) => !agents.has(handle));
+      if (byPrefix === undefined) return recorded('post-agents-not-allowed');
+      return { status: STATUS.forbidden, code: ERROR_CODES.agentsNotAllowed, message: ambiguity.mention(byPrefix, agentsBegunBy(byPrefix)) };
+    }
     return null;
   }
   if (draft.to === me.handle) return recorded('post-self-dm');
   const toAgent = agents.has(draft.to);
   if (!toAgent && !directory.members.some((member) => member.handle === draft.to)) {
-    return { code: ERROR_CODES.unknownRecipient, message: `no agent or member named "${draft.to}"` };
+    return { status: STATUS.notFound, code: ERROR_CODES.unknownRecipient, message: `no agent or member named "${draft.to}"` };
   }
   if (toAgent && !admin && !me.can_address_agents) return recorded('post-dm-agent-not-allowed');
+  if (!toAgent) {
+    // A private message must never reach an agent or come back to its sender, so admins are refused too.
+    const begun = agentsBegunBy(draft.to);
+    if (begun.length > 0) {
+      return { status: STATUS.conflict, code: ERROR_CODES.ambiguousRecipient, message: ambiguity.dmToAgentName(draft.to, begun) };
+    }
+    if (me.handle.toLowerCase().startsWith(draft.to.toLowerCase())) {
+      return { status: STATUS.conflict, code: ERROR_CODES.ambiguousRecipient, message: ambiguity.dmToOwnHandle(draft.to) };
+    }
+  }
   return null;
 }
 
@@ -385,7 +438,8 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
         return Promise.resolve(true);
       }
       clear();
-      session = { status: 'signed-out', error: recorded(given ? 'me-bad-token' : 'me-unauthenticated') };
+      const { code, message } = recorded(given ? 'me-bad-token' : 'me-unauthenticated');
+      session = { status: 'signed-out', error: { code, message } };
       publish();
       return Promise.resolve(false);
     },
@@ -424,9 +478,9 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       const repo = current();
       const member = me();
       if (disposed || !repo || !member || !directory) return Promise.resolve(false);
-      const refused = refusal(draft, member, directory);
+      const refused = refuseWrite(draft, member, directory);
       if (refused) {
-        sendError = refused;
+        sendError = { code: refused.code, message: refused.message };
         publish();
         return Promise.resolve(false);
       }
