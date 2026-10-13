@@ -159,9 +159,16 @@ export function Feed({ snapshot, store, locale, timeZone }: FeedProps) {
 
   useEffect(() => {
     const onVisibilityChange = () => reading.onVisibilityChange();
+    // The log sits in a page that scrolls, so the reader can bring its end into view by scrolling the page
+    // or by resizing the window, with no event on the log itself. Passive: this only reads the layout.
+    const onWindowMove = () => reading.onScroll();
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('scroll', onWindowMove, { passive: true });
+    window.addEventListener('resize', onWindowMove, { passive: true });
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('scroll', onWindowMove);
+      window.removeEventListener('resize', onWindowMove);
       reading.dispose();
     };
   }, [reading]);

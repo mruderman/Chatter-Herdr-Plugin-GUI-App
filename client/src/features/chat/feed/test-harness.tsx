@@ -29,26 +29,36 @@ function ownDescriptor(name: string): PropertyDescriptor {
 }
 
 export interface FakeLayout {
-  /** Height of the log's visible area, in px. */
+  /** Height of the log's visible area, in px (not the browser window's: see `windowHeight`). */
   readonly viewport: number;
   /** Height of every child of the log (headings, separator, messages), in px. */
   readonly row: number;
-  /** The log's distance from the top of the page, in px. */
+  /** The log's distance from the top of the browser window while the page is not scrolled, in px. */
   readonly top: number;
+  /** Height of the browser window (`window.innerHeight`), in px. */
+  readonly windowHeight: number;
+  /** How far the page is scrolled: the log's rect, and its children's, sit this far higher in the window. */
+  readonly pageScroll: number;
   /** The largest scrollTop the log can have now. */
   maxScroll(log: HTMLElement): number;
   /** Where `element`, a child of the log, sits below the top of the log's visible area. */
   offsetInView(log: HTMLElement, element: Element): number;
+  /** What a reader scrolling the page does: the log moves in the window, then the browser fires `scroll` at it. */
+  scrollPageTo(position: number): void;
+  /** The window changes height (rotating a phone, a bar or the keyboard coming and going), then `resize` fires. */
+  resizeWindow(height: number): void;
   uninstall(): void;
 }
 
 /**
  * jsdom has no layout. This gives the `log` a fixed visible height and each of its children the same
  * height, stacked in order, so scrollTop (clamped as a browser clamps it), scrollHeight, clientHeight
- * and getBoundingClientRect agree with each other as they do in a browser. Every other element keeps
- * jsdom's own values.
+ * and getBoundingClientRect agree with each other as they do in a browser. The log also sits in a page
+ * that can be scrolled (scrollPageTo) inside a window of its own height (resizeWindow); the defaults
+ * keep the whole log inside the window, so a test that never moves either sees the log in view. Every
+ * other element keeps jsdom's own values.
  */
-export function installFakeLayout({ viewport = 200, row = 40, top = 100 } = {}): FakeLayout {
+export function installFakeLayout({ viewport = 200, row = 40, top = 100, windowHeight: initialWindowHeight = 768 } = {}): FakeLayout {
   const proto = Element.prototype;
   const originals = {
     scrollTop: ownDescriptor('scrollTop'),
@@ -56,6 +66,9 @@ export function installFakeLayout({ viewport = 200, row = 40, top = 100 } = {}):
     clientHeight: ownDescriptor('clientHeight'),
     getBoundingClientRect: ownDescriptor('getBoundingClientRect'),
   };
+  const originalInnerHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+  let windowHeight = initialWindowHeight;
+  let pageScroll = 0;
   const scrolled = new WeakMap<Element, number>();
   const isLog = (element: Element): boolean => element.getAttribute('role') === 'log';
   const contentHeight = (log: Element): number => log.children.length * row;
@@ -88,24 +101,41 @@ export function installFakeLayout({ viewport = 200, row = 40, top = 100 } = {}):
     configurable: true,
     writable: true,
     value(this: Element): DOMRect {
-      if (isLog(this)) return new DOMRect(0, top, 320, viewport);
+      if (isLog(this)) return new DOMRect(0, top - pageScroll, 320, viewport);
       const parent = this.parentElement;
       if (parent && isLog(parent)) {
         const index = Array.prototype.indexOf.call(parent.children, this);
-        return new DOMRect(0, top + index * row - scrollOf(parent), 320, row);
+        return new DOMRect(0, top - pageScroll + index * row - scrollOf(parent), 320, row);
       }
       return originals.getBoundingClientRect.value.call(this);
     },
   });
+  Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => windowHeight });
 
   return {
     viewport,
     row,
     top,
+    get windowHeight() {
+      return windowHeight;
+    },
+    get pageScroll() {
+      return pageScroll;
+    },
     maxScroll,
     offsetInView: (log, element) => element.getBoundingClientRect().top - log.getBoundingClientRect().top,
+    scrollPageTo(position) {
+      pageScroll = position;
+      fireEvent.scroll(window);
+    },
+    resizeWindow(height) {
+      windowHeight = height;
+      fireEvent(window, new Event('resize'));
+    },
     uninstall() {
       for (const [name, descriptor] of Object.entries(originals)) Object.defineProperty(proto, name, descriptor);
+      if (originalInnerHeight) Object.defineProperty(window, 'innerHeight', originalInnerHeight);
+      else Reflect.deleteProperty(window, 'innerHeight');
     },
   };
 }

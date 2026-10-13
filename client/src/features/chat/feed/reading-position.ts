@@ -21,6 +21,17 @@ export function isAtBottom(log: HTMLElement): boolean {
   return log.scrollHeight - log.scrollTop - log.clientHeight <= BOTTOM_SLACK_PX;
 }
 
+/**
+ * Whether the log's bottom edge is inside the browser window. The log is a box in a page that scrolls, so
+ * a log scrolled to its own end can still be entirely above (or below) the window, and the newest message
+ * is on screen only when this holds as well as isAtBottom. The bottom edge is the one that matters: a log
+ * taller than what is left of the window shows its newest message at its bottom, whatever its top does.
+ */
+export function isBottomInWindow(log: HTMLElement): boolean {
+  const { bottom } = log.getBoundingClientRect();
+  return bottom > 0 && bottom <= window.innerHeight;
+}
+
 /** How far the top of `element` sits below the top edge of the log's visible area. */
 function offsetInView(log: HTMLElement, element: Element): number {
   return element.getBoundingClientRect().top - (log.getBoundingClientRect().top + log.clientTop);
@@ -114,7 +125,10 @@ export class ReadingPosition {
     }
   }
 
-  /** The log scrolled, by the reader or by update(). */
+  /**
+   * The log scrolled, by the reader or by update(), or the window did (the page scrolled, the window was
+   * resized): either one can bring the newest message into view without a new message arriving.
+   */
   onScroll(): void {
     const log = this.log();
     if (!log) return;
@@ -147,10 +161,10 @@ export class ReadingPosition {
     this.cancel();
   }
 
-  /** Read only while the page is shown and the newest message is in view. */
+  /** Read only while the page is shown and the newest message is in view, in the log and in the window. */
   private canMarkRead(): boolean {
     const log = this.log();
-    return log !== null && document.visibilityState === 'visible' && isAtBottom(log);
+    return log !== null && document.visibilityState === 'visible' && isAtBottom(log) && isBottomInWindow(log);
   }
 
   /** Debounced: each new reason restarts the wait, and the conditions are checked again when it ends. */

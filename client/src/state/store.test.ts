@@ -10,7 +10,7 @@ import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError, ProtocolError 
 import { parseDirectory, parseMessagesPage } from '../api/guards';
 import { QUERY, ROUTES } from '../api/routes';
 import type { StreamTiming } from '../api/stream';
-import { CHANNEL, type Directory, type Message } from '../api/types';
+import { CHANNEL, type Directory, type Message, type ReadResult } from '../api/types';
 import type { FakeMember } from './fake';
 import { BRIDGE_ROUTES, FakeBridge, MAIN_REPO, SITE_REPO } from './fake-api';
 import { createStore } from './store';
@@ -84,6 +84,49 @@ function steerDirectory() {
         return new Promise<Directory>((resolve, reject) => {
           asked.push({ answer: resolve, fail: reject });
           const signal = options?.signal;
+          if (signal?.aborted) reject(aborted());
+          signal?.addEventListener('abort', () => reject(aborted()), { once: true });
+        });
+      },
+    }),
+  };
+}
+
+interface HeldRead {
+  readonly repo: string;
+  readonly upToId: number;
+  readonly answer: (lastReadId: number) => void;
+  readonly fail: (error: unknown) => void;
+}
+
+/**
+ * Takes markRead() over once start() is called, until stop(): every acknowledgement is then held, out of
+ * the scripted bridge's sight, until the test answers or fails it, so the test decides which one is out
+ * and in what order they come back, each with the pointer it chooses to carry. With `honourAbort` false a
+ * held request ignores the session's signal, which is how an answer that was already on its way when the
+ * session ended (or that a stack delivers late) reaches the store; with it true the request is rejected
+ * with an AbortError the moment the signal fires, as a fetch is.
+ */
+function steerRead(options: { readonly honourAbort?: boolean } = {}) {
+  const asked: HeldRead[] = [];
+  let steering = false;
+  const aborted = (): DOMException => new DOMException('The operation was aborted.', 'AbortError');
+  return {
+    asked,
+    start(): void {
+      steering = true;
+    },
+    stop(): void {
+      steering = false;
+    },
+    wrap: (inner: Api): Api => ({
+      ...inner,
+      markRead: (repo, upToId, requestOptions) => {
+        if (!steering) return inner.markRead(repo, upToId, requestOptions);
+        return new Promise<ReadResult>((resolve, reject) => {
+          asked.push({ repo, upToId, answer: (lastReadId) => resolve({ last_read_id: lastReadId }), fail: reject });
+          if (!options.honourAbort) return;
+          const signal = requestOptions?.signal;
           if (signal?.aborted) reject(aborted());
           signal?.addEventListener('abort', () => reject(aborted()), { once: true });
         });
@@ -836,6 +879,98 @@ describe('a read acknowledgement that failed', () => {
     expect(soon(h)).toEqual([]);
     await h.advance(TEN_MINUTES);
     expect(upTo(h)).toEqual([14]);
+  });
+
+  // The retry's own request is out when the session ends, and its answer can still come back: late, or
+  // as an abort. Nothing it says may schedule, send or move anything, neither in the store that is gone
+  // nor in the session that took its place.
+  describe('with its request already out when the session ends', () => {
+    const ends: Array<[string, boolean, (h: Harness) => Promise<void> | void]> = [
+      ['sign-out', true, (h) => h.store.signOut()],
+      ['revocation', true, async (h) => {
+        h.bridge.revoke('mira');
+        await settle();
+      }],
+      ['dispose', true, (h) => h.store.dispose()],
+      ['a new sign-in', false, async (h) => {
+        await h.store.signIn(h.bridge.tokenOf('mira'));
+        await settle();
+      }],
+    ];
+    const answers = [
+      { what: 'is accepted late', honourAbort: false, release: (held: HeldRead) => held.answer(14) },
+      { what: 'fails in transit late', honourAbort: false, release: (held: HeldRead) => held.fail(READ_FAILS) },
+      { what: 'is an abort, as a fetch ends', honourAbort: true, release: () => undefined },
+    ];
+
+    describe.each(ends)('ended by %s', (_end, quiet, end) => {
+      it.each(answers)('and the answer $what: nothing more is scheduled or sent', async ({ honourAbort, release }) => {
+        const steer = steerRead({ honourAbort });
+        const h = await reader({ wrap: steer.wrap });
+        h.bridge.failNext(BRIDGE_ROUTES.read, READ_FAILS);
+        await h.store.markRead();
+        expect(soon(h)).toEqual([1_000]);
+        steer.start();
+        await h.advance(1_000);
+        // The retry is out and held: it carries the id that failed, and no timer waits for it any more.
+        expect(steer.asked.map((held) => held.upToId)).toEqual([14]);
+        expect(soon(h)).toEqual([]);
+
+        await end(h);
+        const asked = h.bridge.requests.length;
+        const held = steer.asked[0];
+        if (!held) throw new Error('the retry was not sent');
+        release(held);
+        await settle();
+        expect(soon(h)).toEqual([]);
+        await h.advance(TEN_MINUTES);
+        expect(steer.asked).toHaveLength(1);
+        expect(upTo(h)).toEqual([14]);
+        if (quiet) expect(h.bridge.requests.length).toBe(asked);
+        expect(h.errors).toEqual([]);
+
+        if (quiet) return;
+        // The new session has a pointer of its own, and the old answer (14 where accepted) did not move it:
+        // it still has the newest message to acknowledge, and says so.
+        steer.stop();
+        await h.store.markRead();
+        expect(upTo(h)).toEqual([14, 14]);
+        expect(h.bridge.readPointer('mira')).toBe(14);
+        expect(soon(h)).toEqual([]);
+      });
+    });
+  });
+});
+
+// Two acknowledgements for one repo can be out together (a message arrives while the first is on its way),
+// and their answers can come back in either order, each with the pointer the bridge had when it answered.
+describe('read acknowledgements in flight together', () => {
+  it.each([
+    ['the lower id\'s answer last', [1, 0]],
+    ['the higher id\'s answer last', [0, 1]],
+  ])('leave the pointer at the higher value, with %s', async (_order, order) => {
+    const steer = steerRead();
+    const h = await harness({ as: 'mira', lastReadId: 0, wrap: steer.wrap });
+    steer.start();
+    const first = h.store.markRead();
+    await settle();
+    const later = h.bridge.write({ from: 'thom', body: 'arrived while the first acknowledgement was out' });
+    await settle();
+    const second = h.store.markRead();
+    await settle();
+    expect(steer.asked.map((held) => held.upToId)).toEqual([14, later.id]);
+    for (const index of order) {
+      const held = steer.asked[index];
+      if (!held) throw new Error(`no acknowledgement ${index}`);
+      held.answer(held.upToId);
+      await settle();
+    }
+    await Promise.all([first, second]);
+    // The pointer is not in the snapshot; what the store still has to say shows it. Past `later` there is nothing.
+    steer.stop();
+    await h.store.markRead();
+    expect(h.bridge.requests.filter((request) => request.route === BRIDGE_ROUTES.read)).toEqual([]);
+    expect(h.errors).toEqual([]);
   });
 });
 

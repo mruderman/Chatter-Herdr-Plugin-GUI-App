@@ -254,3 +254,129 @@ describe('markRead: debounced 500 ms, only while the page is shown and the newes
     expect(markRead).not.toHaveBeenCalled();
   });
 });
+
+// G2 round 4, finding 2. The log is a box inside a page that scrolls, so the log being scrolled to its own
+// end says nothing about the browser window: at 200% text on a phone the page can be scrolled until the
+// log is entirely above the window. The fake layout puts the log 100 to 300 px down a 768 px window.
+describe('markRead: only while the log\'s bottom edge is inside the browser window', () => {
+  /** The page scrolled until the whole log is above the window (its bottom at -100). */
+  const scrollLogOutOfWindow = (): void => layout.scrollPageTo(layout.top + layout.viewport + 100);
+
+  it('sends nothing for a message that arrives while the log is entirely above the window', () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const markRead = vi.spyOn(store, 'markRead');
+    open(store);
+    advance(500);
+    expect(markRead).toHaveBeenCalledTimes(1);
+    scrollLogOutOfWindow();
+    receive(store);
+    advance(2_000);
+    expect(markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends one acknowledgement with the newest id, after the debounce, when a window scroll brings the log back', () => {
+    // Everything recorded is read (pointer 14), so the pointer shows which message an acknowledgement reached.
+    const store = createFakeStore({ as: 'thom', lastReadId: 14, clock: clockAfterRecordings() });
+    const markRead = vi.spyOn(store, 'markRead');
+    const log = open(store);
+    advance(500);
+    scrollLogOutOfWindow();
+    receive(store);
+    advance(2_000);
+    expect(markRead).toHaveBeenCalledTimes(1);
+    expect(store.readPointer(REPO)).toBe(14);
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+    layout.scrollPageTo(0);
+    advance(499);
+    expect(markRead).toHaveBeenCalledTimes(1);
+    advance(1);
+    expect(markRead).toHaveBeenCalledTimes(2);
+    const newest = store.getSnapshot().messages.at(-1)?.id;
+    expect(newest).toBeGreaterThan(14);
+    expect(store.readPointer(REPO)).toBe(newest);
+    advance(5_000);
+    expect(markRead).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends nothing for a conversation that opens with the log below the window, until the page is scrolled to it', () => {
+    layout.resizeWindow(250);
+    const store = createFakeStore({ as: 'thom', lastReadId: 100 });
+    const markRead = vi.spyOn(store, 'markRead');
+    open(store);
+    advance(2_000);
+    expect(markRead).not.toHaveBeenCalled();
+    layout.scrollPageTo(100);
+    advance(500);
+    expect(markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends for a log whose top is above the window while its bottom is inside', () => {
+    layout.scrollPageTo(150);
+    expect(layout.top - layout.pageScroll).toBeLessThan(0);
+    const store = createFakeStore({ as: 'thom', lastReadId: 100 });
+    const markRead = vi.spyOn(store, 'markRead');
+    open(store);
+    advance(500);
+    expect(markRead).toHaveBeenCalledTimes(1);
+  });
+
+  // The log's bottom edge sits at `bottom` in the window (768 px tall); the log is 200 px high.
+  it.each([
+    { where: 'exactly at the lower edge', bottom: 768, acknowledged: true },
+    { where: 'one px below the lower edge', bottom: 769, acknowledged: false },
+    { where: 'one px inside the upper edge', bottom: 1, acknowledged: true },
+    { where: 'exactly at the upper edge', bottom: 0, acknowledged: false },
+  ])('with the bottom edge $where, acknowledging is $acknowledged', ({ bottom, acknowledged }) => {
+    layout.scrollPageTo(layout.top + layout.viewport - bottom);
+    const store = createFakeStore({ as: 'thom', lastReadId: 100 });
+    const markRead = vi.spyOn(store, 'markRead');
+    open(store);
+    advance(2_000);
+    expect(markRead).toHaveBeenCalledTimes(acknowledged ? 1 : 0);
+  });
+
+  it('sends when a window resize brings the bottom inside the window', () => {
+    layout.resizeWindow(250);
+    const store = createFakeStore({ as: 'thom', lastReadId: 100 });
+    const markRead = vi.spyOn(store, 'markRead');
+    open(store);
+    advance(1_000);
+    expect(markRead).not.toHaveBeenCalled();
+    layout.resizeWindow(400);
+    advance(499);
+    expect(markRead).not.toHaveBeenCalled();
+    advance(1);
+    expect(markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a waiting call when the log leaves the window before it is due', () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100 });
+    const markRead = vi.spyOn(store, 'markRead');
+    open(store);
+    advance(200);
+    scrollLogOutOfWindow();
+    advance(1_000);
+    expect(markRead).not.toHaveBeenCalled();
+  });
+
+  it('listens to the window\'s scroll and resize passively, and stops when the feed has gone', () => {
+    // Behaviour cannot tell a listener that stays behind from one that was removed: once the feed has gone
+    // the log is gone too and the handler returns early. So the calls themselves are what is checked.
+    const added = vi.spyOn(window, 'addEventListener');
+    const removed = vi.spyOn(window, 'removeEventListener');
+    try {
+      open(createFakeStore({ as: 'thom', lastReadId: 100 }));
+      const listenersFor = (spy: typeof added, type: string): unknown[] => spy.mock.calls.filter(([name]) => name === type).map(([, listener]) => listener);
+      for (const type of ['scroll', 'resize']) {
+        expect(listenersFor(added, type), type).toHaveLength(1);
+        expect(added.mock.calls.find(([name]) => name === type)?.[2], type).toEqual(expect.objectContaining({ passive: true }));
+        expect(listenersFor(removed, type), type).toHaveLength(0);
+      }
+      cleanup();
+      for (const type of ['scroll', 'resize']) expect(listenersFor(removed, type), type).toEqual(listenersFor(added, type));
+    } finally {
+      added.mockRestore();
+      removed.mockRestore();
+    }
+  });
+});
