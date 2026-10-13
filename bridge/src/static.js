@@ -113,7 +113,10 @@ async function whyUnresolved(root, candidate) {
 /**
  * Opens the regular file at `candidate`, following symlinks only to targets inside `root`.
  * Returns { handle, size }, MISSING or OUTSIDE (which includes an entry that is there but cannot be
- * opened). The handle is opened on the resolved path, so the file streamed is the file that was checked.
+ * opened). The handle is opened on the resolved path, not on the path as requested, so a symlink
+ * that already points outside is never followed. A path component swapped for a symlink between the
+ * check and the open is not detected: that needs write access to the served tree, which is operator
+ * control of the app (SPEC section 10), so it is not defended against here.
  */
 async function openInside(root, candidate) {
   let real;
