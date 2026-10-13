@@ -60,22 +60,26 @@ interface Database {
 
 type MakeEnv = (options?: { limits?: { maxBody: number; postsPerMinute: number } }) => Promise<Env>;
 
-/** The three senders: one of each standing the rules tell apart, and a member whose handle another member's is the start of. */
+/**
+ * The three senders: one of each standing the rules tell apart. Each has a member whose handle is the
+ * start of the sender's own (`ownPrefix`) and a departed agent whose name is (`ownDeparted`).
+ */
 const SENDERS = [
-  { role: 'restricted', handle: 'kieran', ownPrefix: 'kier' },
-  { role: 'permitted', handle: 'mira', ownPrefix: 'mir' },
-  { role: 'admin', handle: 'flan', ownPrefix: 'fla' },
-] as const satisfies readonly { role: string; handle: FakeMember; ownPrefix: string }[];
+  { role: 'restricted', handle: 'kieran', ownPrefix: 'kier', ownDeparted: 'kie' },
+  { role: 'permitted', handle: 'mira', ownPrefix: 'mir', ownDeparted: 'mi' },
+  { role: 'admin', handle: 'flan', ownPrefix: 'fla', ownDeparted: 'fl' },
+] as const satisfies readonly { role: string; handle: FakeMember; ownPrefix: string; ownDeparted: string }[];
 type Sender = (typeof SENDERS)[number];
 
 /**
  * The world, the same for the bridge and for the fakes (which are given the bridge's own directory):
  * agents seeded in alphabetical order, because the bridge lists the agents a name is the start of in the
- * order of its roster and the directory lists them sorted. Two have departed: `wren-old`, which no live
- * name starts with, and `rowan`, which is the start of the live `rowan-worker`.
+ * order of its roster and the directory lists them sorted. Departed: `wren-old`, which no live name
+ * starts with; `rowan`, which is the start of the live `rowan-worker`; and `fl`, `kie` and `mi`, each the
+ * start of one sender's handle and of no live name.
  */
-const AGENTS = ['codex-worker', 'ivy-one', 'ivy-two', 'rowan', 'rowan-worker', 'thomas-worker', 'wren-old'] as const;
-const DEPARTED = ['rowan', 'wren-old'] as const;
+const AGENTS = ['codex-worker', 'fl', 'ivy-one', 'ivy-two', 'kie', 'mi', 'rowan', 'rowan-worker', 'thomas-worker', 'wren-old'] as const;
+const DEPARTED = ['fl', 'kie', 'mi', 'rowan', 'wren-old'] as const;
 const MEMBERS = [
   { handle: 'mira', kind: 'human', can_address_agents: true },
   { handle: 'kieran', kind: 'computational', can_address_agents: false },
@@ -90,11 +94,12 @@ const MEMBERS = [
 
 interface Case {
   readonly name: string;
-  /** "#chat", a handle, or the proper prefix of the sender's own handle. */
-  readonly to: string | typeof OWN_PREFIX | typeof THEMSELVES;
+  /** "#chat", a handle, or a name made from the sender's own handle. */
+  readonly to: string | typeof OWN_PREFIX | typeof OWN_DEPARTED | typeof THEMSELVES;
   readonly body: string;
 }
 const OWN_PREFIX = Symbol('a proper prefix of the sender\'s own handle');
+const OWN_DEPARTED = Symbol('a departed agent whose name is the start of the sender\'s own handle');
 const THEMSELVES = Symbol('the sender');
 
 const post = (name: string, body: string): Case => ({ name, to: CHANNEL, body });
@@ -131,9 +136,11 @@ const CASES: readonly Case[] = [
   dm('a DM to rowan-worker, the live agent', 'rowan-worker'),
   dm('a DM to wren-old, a departed agent that is the start of no live one', 'wren-old'),
   dm('a DM to rowan, a departed agent that is the start of a live one', 'rowan'),
+  dm('a DM to a departed agent whose name is the start of the sender\'s own handle', OWN_DEPARTED),
 ];
 
 const DEPARTED_AGENT = 'the directory lists a departed agent, which the bridge leaves out when it decides what a name is the start of; the fake has the directory and no roster';
+const OWN_HANDLE_NOT_LIVE = 'the directory offers a departed agent\'s name that is the start of the sender\'s own handle; the bridge refuses a DM to it with 409 "is the start of your own handle ... is not a live agent of this repo", checked before the permission, because only an exact name on the live roster is matched before the sender; the fake takes every agent of the directory for a live one';
 const NOT_ON_THE_ROSTER = 'the directory offers a name that is not on this repo\'s live roster (a departed agent, or an agent of another repo) and is the start of a name that is; the bridge refuses a DM to it with 409 "is not a live agent of this repo", checked before the permission, while the fake takes every agent of the directory for a live one';
 
 /**
@@ -149,6 +156,9 @@ const UNMODELLED: Readonly<Record<string, string>> = {
   'a DM to rowan, a departed agent that is the start of a live one as restricted': NOT_ON_THE_ROSTER,
   'a DM to rowan, a departed agent that is the start of a live one as permitted': NOT_ON_THE_ROSTER,
   'a DM to rowan, a departed agent that is the start of a live one as admin': NOT_ON_THE_ROSTER,
+  'a DM to a departed agent whose name is the start of the sender\'s own handle as restricted': OWN_HANDLE_NOT_LIVE,
+  'a DM to a departed agent whose name is the start of the sender\'s own handle as permitted': OWN_HANDLE_NOT_LIVE,
+  'a DM to a departed agent whose name is the start of the sender\'s own handle as admin': OWN_HANDLE_NOT_LIVE,
 };
 
 interface Stored {
@@ -177,6 +187,7 @@ interface Row {
 
 const toWhom = (sender: Sender, to: Case['to']): string => {
   if (to === OWN_PREFIX) return sender.ownPrefix;
+  if (to === OWN_DEPARTED) return sender.ownDeparted;
   return to === THEMSELVES ? sender.handle : to;
 };
 
@@ -344,6 +355,17 @@ describe.skipIf(!HAVE_CHATTER)('the fakes against the real bridge and Chatter (n
       expect(row?.real.status, sender.role).toBe(409);
       expect(row?.real.refusal?.code, sender.role).toBe('ambiguous_recipient');
       expect(row?.real.refusal?.message, sender.role).toMatch(/^"rowan" is the start of the name of the Herdr agent rowan-worker, .* "rowan" is not a live agent of this repo\.$/);
+    }
+  });
+
+  // The same guard for the own-handle rule: a departed name that starts the sender's handle and no live
+  // name is refused as the sender's own handle, with the advice for a name only the directory offers.
+  it('has the real bridge refuse a DM to a departed name that starts the sender\'s own handle as "not a live agent of this repo", checked before the permission', () => {
+    for (const sender of SENDERS) {
+      const row = rows.find((candidate) => candidate.key === `a DM to a departed agent whose name is the start of the sender's own handle as ${sender.role}`);
+      expect(row?.real.status, sender.role).toBe(409);
+      expect(row?.real.refusal?.code, sender.role).toBe('ambiguous_recipient');
+      expect(row?.real.refusal?.message, sender.role).toBe(`"${sender.ownDeparted}" is the start of your own handle, so Chatter would take it for you; nothing was sent. "${sender.ownDeparted}" is not a live agent of this repo.`);
     }
   });
 

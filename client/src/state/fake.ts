@@ -204,7 +204,10 @@ const ambiguity = {
  * agent's name makes a handle look like an agent to the fake and not to the bridge, and a name that the
  * directory offers but that is not on the roster, while being the start of a name that is, is refused by
  * the bridge with 409 `"<name>" is not a live agent of this repo.` and accepted or refused as an agent by
- * the fake. The cases are listed in bridge-parity.test.ts, which keeps that list exact.
+ * the fake. The same goes for such a name that is the start of the sender's own handle: the bridge's
+ * own-handle refusal covers every DM name that is not exactly on the roster, a member's handle or an
+ * agent name only the directory offers, and is checked before the permission; the fake applies that
+ * rule to members' handles only. The cases are listed in bridge-parity.test.ts, which keeps that list exact.
  */
 export function refuseWrite(draft: SendDraft, me: Me, directory: Directory): Refusal | null {
   if (!draft.to) return recorded('post-missing-to');
