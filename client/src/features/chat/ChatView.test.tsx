@@ -201,6 +201,41 @@ describe('the chat stylesheets keep the design system\'s rules', () => {
     expect(log?.declarations.get('overflow-anchor')).toBe('none');
   });
 
+  it('makes the log the containing block of what it holds, so a hidden time in it cannot stretch the page', () => {
+    // The visually hidden <time> of a message that continues a group is `position: absolute` (components.css).
+    // Without a positioned log each one stretched the page's scroll height by its place in the log.
+    expect(rule(SHEETS['feed.css'], '.feed__log')?.declarations.get('position')).toBe('relative');
+  });
+
+  it('gives the log a floor and the height the window leaves, not a height of its own', () => {
+    const log = rule(SHEETS['feed.css'], '.feed__log');
+    expect(log?.declarations.get('min-block-size')).toBe('12rem');
+    // A flex basis of 0 keeps the length of the feed out of the page's height; a block-size would bring a fixed one back.
+    expect(log?.declarations.get('flex')).toBe('1 1 0');
+    expect(log?.declarations.has('block-size')).toBe(false);
+  });
+
+  it('is a column of growing boxes from the shell\'s <main> down to the log, and the conversation list cannot set its height', () => {
+    expect(rule(readStyle('./layout.css'), '.app-main')?.declarations.get('display')).toBe('flex');
+    for (const [css, selector] of [
+      [SHEETS['ChatView.css'], '.chat'],
+      [SHEETS['ChatView.css'], '.chat__layout'],
+      [SHEETS['feed.css'], '.feed'],
+    ] as const) {
+      expect(rule(css, selector)?.declarations.get('flex'), selector).toBe('1 1 auto');
+    }
+    for (const [css, selector] of [
+      [SHEETS['ChatView.css'], '.chat__conversation'],
+      [SHEETS['feed.css'], '.feed'],
+    ] as const) {
+      expect(rule(css, selector)?.declarations.get('flex-direction'), selector).toBe('column');
+    }
+    // Side by side the list is a scroll box inside a column that counts as empty to the grid.
+    const column = rule(SHEETS['conversations.css'], '.conversations', '@media (min-width: 48rem)');
+    expect(column?.declarations.get('contain')).toBe('size');
+    expect(rule(SHEETS['conversations.css'], '.conversations__list', '@media (min-width: 48rem)')?.declarations.get('overflow-y')).toBe('auto');
+  });
+
   it('gives a mention a bar beside it as well as its label', () => {
     expect(rule(SHEETS['feed.css'], '.message--mentions-you')?.declarations.get('border-inline-start')).toMatch(/^[3-9]px solid /);
   });

@@ -50,9 +50,27 @@
 }
 
 @media (min-width: 48rem) {
+  /*
+   * Beside the feed the list is a column, and it can be long: an admin has a button for every pair's DMs.
+   * The feed fills the height of the row it shares with this column (ChatView.css), so the list must not
+   * set that height. Size containment makes the column count as empty to the grid, which stretches it to the
+   * row instead, and the list scrolls inside it. The list's padding leaves room for the focus ring, which
+   * the scroll box would clip; the negative margin keeps the buttons where they were.
+   */
+  .conversations {
+    display: flex;
+    flex-direction: column;
+    contain: size;
+  }
+
   .conversations__list {
+    flex: 1 1 auto;
     flex-direction: column;
     flex-wrap: nowrap;
+    min-block-size: 0;
+    margin: calc(-1 * (var(--focus-width) + var(--focus-offset)));
+    padding: calc(var(--focus-width) + var(--focus-offset));
+    overflow-y: auto;
   }
 
   .conversations__button {

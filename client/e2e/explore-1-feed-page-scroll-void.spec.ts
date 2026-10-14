@@ -1,15 +1,16 @@
-// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 1). Written to FAIL on the current code.
-// Every message that continues a group carries a `<time class="visually-hidden">`, which is
-// `position: absolute` (styles/components.css). The Messages log is `overflow-y: auto` but not positioned,
-// so those elements are not clipped or contained by it: each sits at its place in the log's own scroll
-// height and stretches the PAGE's scroll height with it. With a long feed the page scrolls thousands of
-// pixels past the composer into blank space (seen: 9707 px of document for 1029 px of content, 300 messages).
+// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 1). Guards the fix: it failed on the code before it.
+// Every message that continues a group carries a `<time class="visually-hidden">`, which is `position: absolute`
+// (styles/components.css). The Messages log scrolls (`overflow-y: auto`) but was not positioned, so those elements
+// were not contained by it: each sat at its place in the log's own scroll height and stretched the PAGE's scroll
+// height with it. With a long feed the page scrolled thousands of pixels past the composer into blank space (seen:
+// 9707 px of document for 1029 px of content with 300 messages; 7242 px here with 40). The log is now the containing
+// block of what it holds (features/chat/feed/feed.css), so a hidden time stays inside it.
 // Runs against its own bridge. The rows are written straight into that scratch Chatter database, as
 // bridge/test/helpers.js does for agents: a few thousand pixels of feed need no 40 Chatter processes.
 import path from 'node:path';
-import { loadBridgeHelpers, type BridgeEnv } from '../e2e/harness/bridge';
-import { expect, openChat, signIn, test } from '../e2e/harness/fixtures';
-import { POLL_MS, type World } from '../e2e/harness/world';
+import { loadBridgeHelpers, type BridgeEnv } from './harness/bridge';
+import { expect, openChat, signIn, test } from './harness/fixtures';
+import { POLL_MS, type World } from './harness/world';
 
 async function privateBridge(world: World): Promise<BridgeEnv> {
   const { makeEnv } = await loadBridgeHelpers();

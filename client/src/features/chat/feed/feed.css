@@ -3,25 +3,36 @@
  * and the labels are words, and a mention adds a bar beside the message as well as its label.
  */
 
+/* A column that takes the height the chat view leaves it (ChatView.css); the log is what grows. */
 .feed {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
 }
 
 .feed__older {
-  justify-self: start;
+  align-self: flex-start;
 }
 
 /*
- * The log scrolls by itself so the composer stays in reach below it. Its height follows the small
- * viewport height, which does not change while a phone's browser bars or keyboard come and go, so a
- * reader kept at the newest message stays there. Scroll anchoring is off because the feed restores the
- * reading position itself when older messages load; the browser's own adjustment would add to it.
+ * The log scrolls by itself so the composer stays in reach below it. It takes the height the window has
+ * left, so the newest message and the message box fit on one screen, and never less than 12rem: a short
+ * window or large text leaves it that floor and the page scrolls instead. Its flex basis is 0, not its
+ * content, so a long feed does not set the log's height or the page's; only the floor counts when the
+ * boxes around it add up their sizes. A reader kept at the newest message stays there when the log is
+ * resized (reading-position.ts). Scroll anchoring is off because the feed restores the reading position
+ * itself when older messages load; the browser's own adjustment would add to it.
+ *
+ * Positioned so that it contains what it holds: a message that continues a group carries a visually
+ * hidden <time> (`position: absolute`), which a log that was not positioned did not contain, so each
+ * stretched the page's scroll height by its place in the log, thousands of pixels of blank page below
+ * the composer.
  */
 .feed__log {
-  block-size: clamp(12rem, 60vh, 48rem);
-  block-size: clamp(12rem, 60svh, 48rem);
+  position: relative;
+  flex: 1 1 0;
+  min-block-size: 12rem;
   overflow-y: auto;
   overflow-anchor: none;
   padding: var(--space-2) var(--space-3);

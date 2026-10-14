@@ -380,3 +380,77 @@ describe('markRead: only while the log\'s bottom edge is inside the browser wind
     }
   });
 });
+
+// The log takes the height the window leaves it (feed.css), so it changes size when the box under it grows or
+// the window changes, and the browser fires no `scroll` at it for that: scrollTop keeps its value while the
+// visible area gets shorter, and a reader who was at the newest message would find it cut off. The fake
+// layout's content is 400 px; the log shows 200 px, so its end is at scrollTop 200.
+describe('when the log changes size', () => {
+  it('keeps a reader who was at the bottom at the bottom when the log gets shorter', () => {
+    const log = open(createFakeStore({ as: 'thom', lastReadId: 100 }));
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+    layout.resizeLog(120);
+    expect(layout.maxScroll(log)).toBe(280);
+    expect(log.scrollTop).toBe(280);
+  });
+
+  it('keeps that reader there when the window\'s resize event comes first and has already taken the log\'s end out of view', () => {
+    // A window that gets shorter shortens the log with it: `resize` is fired at the window before the observers
+    // hear of the log, and the feed's own listener for it reads the log as it is by then.
+    const log = open(createFakeStore({ as: 'thom', lastReadId: 100 }));
+    layout.resizeLog(120, { notify: false });
+    layout.resizeWindow(700);
+    layout.notifyResize();
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+  });
+
+  it('leaves a reader who scrolled up exactly where they were', () => {
+    const log = open(createFakeStore({ as: 'thom', lastReadId: 100 }));
+    scrollLogTo(log, 40);
+    layout.resizeLog(120);
+    expect(log.scrollTop).toBe(40);
+  });
+
+  it('leaves a reader placed at the marker where they were', () => {
+    const log = open(createFakeStore({ as: 'mira' }));
+    const placed = log.scrollTop;
+    expect(placed).toBeLessThan(layout.maxScroll(log));
+    layout.resizeLog(120);
+    expect(log.scrollTop).toBe(placed);
+  });
+
+  it('has a reader who was at the bottom still follow new messages afterwards', () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = open(store);
+    layout.resizeLog(120);
+    receive(store, 2);
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+  });
+
+  it('leaves a reader at the bottom when the log gets taller, which the browser clamps to its new end', () => {
+    const log = open(createFakeStore({ as: 'thom', lastReadId: 100 }));
+    layout.resizeLog(300);
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+  });
+
+  it('acknowledges the newest message when the log\'s end comes into view by the log changing size', () => {
+    // The log's bottom edge is below the window until the log gets shorter.
+    layout.resizeWindow(250);
+    const store = createFakeStore({ as: 'thom', lastReadId: 100 });
+    const markRead = vi.spyOn(store, 'markRead');
+    open(store);
+    advance(1_000);
+    expect(markRead).not.toHaveBeenCalled();
+    layout.resizeLog(120);
+    advance(500);
+    expect(markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops observing the log when the feed has gone', () => {
+    const disconnect = vi.spyOn(ResizeObserver.prototype, 'disconnect');
+    open(createFakeStore({ as: 'thom', lastReadId: 100 }));
+    expect(disconnect).not.toHaveBeenCalled();
+    cleanup();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+});

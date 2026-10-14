@@ -72,8 +72,15 @@
   list-style: none;
 }
 
+/*
+ * <main> takes the height the window has left under the header and the navigation, and is a column of
+ * its own, so a view can hand that height on: the Chat view's log fills what remains (features/chat/
+ * ChatView.css). A view that does not ask for it keeps the height of its content, as in a block.
+ */
 .app-main {
   flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
   min-inline-size: 0;
   padding: var(--space-4);
 }

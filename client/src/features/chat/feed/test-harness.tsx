@@ -29,7 +29,7 @@ function ownDescriptor(name: string): PropertyDescriptor {
 }
 
 export interface FakeLayout {
-  /** Height of the log's visible area, in px (not the browser window's: see `windowHeight`). */
+  /** Height of the log's visible area now, in px (not the browser window's: see `windowHeight`). */
   readonly viewport: number;
   /** Height of every child of the log (headings, separator, messages), in px. */
   readonly row: number;
@@ -47,6 +47,14 @@ export interface FakeLayout {
   scrollPageTo(position: number): void;
   /** The window changes height (rotating a phone, a bar or the keyboard coming and going), then `resize` fires. */
   resizeWindow(height: number): void;
+  /**
+   * The log's own box changes height (the composer under it grew, the window did). The browser tells whoever
+   * observes the log (`ResizeObserver`) and fires no `scroll`: scrollTop keeps its value, and only a browser
+   * that has to (the log grew past its end) clamps it. `notify: false` leaves the telling to `notifyResize`.
+   */
+  resizeLog(height: number, options?: { notify?: boolean }): void;
+  /** Tells the observers of the log that its box changed size. */
+  notifyResize(): void;
   uninstall(): void;
 }
 
@@ -58,7 +66,7 @@ export interface FakeLayout {
  * keep the whole log inside the window, so a test that never moves either sees the log in view. Every
  * other element keeps jsdom's own values.
  */
-export function installFakeLayout({ viewport = 200, row = 40, top = 100, windowHeight: initialWindowHeight = 768 } = {}): FakeLayout {
+export function installFakeLayout({ viewport: initialViewport = 200, row = 40, top = 100, windowHeight: initialWindowHeight = 768 } = {}): FakeLayout {
   const proto = Element.prototype;
   const originals = {
     scrollTop: ownDescriptor('scrollTop'),
@@ -67,13 +75,38 @@ export function installFakeLayout({ viewport = 200, row = 40, top = 100, windowH
     getBoundingClientRect: ownDescriptor('getBoundingClientRect'),
   };
   const originalInnerHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+  let viewport = initialViewport;
   let windowHeight = initialWindowHeight;
   let pageScroll = 0;
   const scrolled = new WeakMap<Element, number>();
+  // jsdom has no ResizeObserver; this one is told by resizeLog / notifyResize and by nothing else.
+  const observers = new Set<FakeResizeObserver>();
+  const originalResizeObserver = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  class FakeResizeObserver {
+    private readonly watching = new Set<Element>();
+    constructor(private readonly callback: () => void) {
+      observers.add(this);
+    }
+    observe(element: Element): void {
+      this.watching.add(element);
+    }
+    unobserve(element: Element): void {
+      this.watching.delete(element);
+    }
+    disconnect(): void {
+      this.watching.clear();
+      observers.delete(this);
+    }
+    notify(): void {
+      if (this.watching.size > 0) this.callback();
+    }
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, writable: true, value: FakeResizeObserver });
   const isLog = (element: Element): boolean => element.getAttribute('role') === 'log';
   const contentHeight = (log: Element): number => log.children.length * row;
   const maxScroll = (log: Element): number => Math.max(0, contentHeight(log) - viewport);
-  const scrollOf = (log: Element): number => scrolled.get(log) ?? 0;
+  // A browser clamps a scroll offset that the log's growth has left past its end.
+  const scrollOf = (log: Element): number => Math.min(scrolled.get(log) ?? 0, maxScroll(log));
 
   Object.defineProperty(proto, 'scrollTop', {
     configurable: true,
@@ -112,8 +145,14 @@ export function installFakeLayout({ viewport = 200, row = 40, top = 100, windowH
   });
   Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => windowHeight });
 
+  const notifyResize = (): void => {
+    for (const observer of [...observers]) observer.notify();
+  };
+
   return {
-    viewport,
+    get viewport() {
+      return viewport;
+    },
     row,
     top,
     get windowHeight() {
@@ -132,7 +171,15 @@ export function installFakeLayout({ viewport = 200, row = 40, top = 100, windowH
       windowHeight = height;
       fireEvent(window, new Event('resize'));
     },
+    resizeLog(height, { notify = true } = {}) {
+      viewport = height;
+      if (notify) notifyResize();
+    },
+    notifyResize,
     uninstall() {
+      observers.clear();
+      if (originalResizeObserver) Object.defineProperty(globalThis, 'ResizeObserver', originalResizeObserver);
+      else Reflect.deleteProperty(globalThis, 'ResizeObserver');
       for (const [name, descriptor] of Object.entries(originals)) Object.defineProperty(proto, name, descriptor);
       if (originalInnerHeight) Object.defineProperty(window, 'innerHeight', originalInnerHeight);
       else Reflect.deleteProperty(window, 'innerHeight');

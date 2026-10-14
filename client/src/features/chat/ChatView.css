@@ -2,24 +2,41 @@
  * The chat view: conversations beside the feed when there is room, above it when there is not. Every
  * column may shrink to zero (`minmax(0, 1fr)`), so a long label or word cannot push the page wider
  * than a 320 px screen.
+ *
+ * The view also takes whatever height the window has left, so the newest message and the message box
+ * share the first screen. Nothing here has a height of its own: from <main> down to the log every box is
+ * a flex column (or a grid row) that grows into the free space, and the only size that is set is the
+ * log's floor (feed.css). A flex box is never smaller than what its children need at the least, so
+ * when the window is short or the text is large the floors add up past the window, the page grows and
+ * scrolls as usual, and nothing is clipped or pinned.
  */
 
+.chat {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
 .chat__layout {
+  flex: 1 1 auto;
   display: grid;
+  /* The conversation list above the feed; the feed's row takes what is left. */
+  grid-template-rows: auto 1fr;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
-  align-items: start;
 }
 
 @media (min-width: 48rem) {
   .chat__layout {
     grid-template-columns: minmax(10rem, 16rem) minmax(0, 1fr);
+    /* Side by side there is one row, and it is the feed's. */
+    grid-template-rows: 1fr;
   }
 }
 
 .chat__conversation {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
 }
 

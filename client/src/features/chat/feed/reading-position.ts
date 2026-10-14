@@ -72,6 +72,11 @@ export class ReadingPosition {
   private markedId: number | undefined;
   private anchor: Anchor | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  /** Hears when the log's box changes size; started by the first update() and stopped by dispose(). */
+  private observer: ResizeObserver | undefined;
+  private observed: HTMLElement | null = null;
+  /** The height of the log's visible area when the observer last looked: what a resize is compared with. */
+  private height: number | undefined;
   private readonly log: () => HTMLElement | null;
   private readonly markRead: () => void;
 
@@ -88,6 +93,7 @@ export class ReadingPosition {
   update(key: string, messages: readonly Message[]): void {
     const log = this.log();
     if (!log) return;
+    this.watch(log);
     if (key !== this.key) {
       this.key = key;
       this.positioned = false;
@@ -137,6 +143,26 @@ export class ReadingPosition {
     if (this.pinned) this.schedule();
   }
 
+  /**
+   * The log's box changed size, because the box under it grew or the window did. The browser fires no
+   * `scroll` for that, and scrollTop keeps its value while the visible area gets shorter, which would cut
+   * the newest message off a reader who was looking at it. Whether they were is decided from the height
+   * the log had, not from `pinned`: a window that got shorter has already fired `resize`, whose handler
+   * (onScroll) read the shortened log and let go of the reader.
+   */
+  onResize(): void {
+    const log = this.log();
+    if (!log) return;
+    const before = this.height;
+    this.height = log.clientHeight;
+    if (!this.positioned) return;
+    if (before !== undefined && before !== this.height && log.scrollHeight - log.scrollTop - before <= BOTTOM_SLACK_PX) {
+      log.scrollTop = log.scrollHeight;
+    }
+    // The newest message may have come into view, or the reader's place may have changed, as with a scroll.
+    this.onScroll();
+  }
+
   /** The page was hidden or shown again (`visibilitychange`). */
   onVisibilityChange(): void {
     this.schedule();
@@ -159,6 +185,20 @@ export class ReadingPosition {
 
   dispose(): void {
     this.cancel();
+    this.observer?.disconnect();
+    this.observer = undefined;
+    this.observed = null;
+    this.height = undefined;
+  }
+
+  /** Observes the log once, whichever render finds it first. jsdom has no ResizeObserver, and nothing resizes there. */
+  private watch(log: HTMLElement): void {
+    if (this.observed === log || typeof ResizeObserver === 'undefined') return;
+    this.observer?.disconnect();
+    this.height = log.clientHeight;
+    this.observer = new ResizeObserver(() => this.onResize());
+    this.observer.observe(log);
+    this.observed = log;
   }
 
   /** Read only while the page is shown and the newest message is in view, in the log and in the window. */
