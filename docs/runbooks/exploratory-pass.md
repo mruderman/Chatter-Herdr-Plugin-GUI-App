@@ -1,6 +1,8 @@
 # Exploratory GUI pass (V5 of the deploy-and-verify slice)
 
-> **After the merge:** the ten failing reproductions (`explore-1` to `explore-10`) live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green (30 pass: the 29 and `explore-11`). Run them with `npm run e2e:pending` (10 fail, each for the reason it names); when a finding is fixed, move its spec into `client/e2e/` and change its harness imports from `../e2e/harness/` to `./harness/`.
+> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`): their specs moved to `client/e2e/` and now guard the fix, and `npm run e2e:pending` fails the remaining 8 (`explore-2` to `explore-6` and `explore-8` to `explore-10`), each for the reason it names; the default suite is 43 specs. The text below is the pass as it was found.
+>
+> When another finding is fixed, move its spec into `client/e2e/` and change its harness imports from `../e2e/harness/` to `./harness/`.
 
 
 A member's-eye look at the built web client in a real browser, against a throwaway deployment with test data only, to find
@@ -95,7 +97,7 @@ reading `features/notify/notifier.ts`: no message text in notifications (the not
 reproduced twice (the first time in the pane, the second in the pane or by the spec, as stated). Spec failure lines are the ones
 printed on the final tree.
 
-**1. A long feed makes the page scroll thousands of pixels into blank space.** *Usability.*
+**1. A long feed makes the page scroll thousands of pixels into blank space.** **FIXED 2026-10-14 (`a69d030`).** *Usability.*
 Did: opened Chat with 300 messages. Expected: the page ends at the composer. Happened: `document.documentElement.scrollHeight`
 9707 against 1029 for the body; scrolling past the composer shows an empty page (second reproduction: 9238 against 1029).
 Cause: each message that continues a group carries `<time class="visually-hidden">`, `position: absolute`, and the log is
@@ -148,7 +150,7 @@ to latest". The reading-position rule (only a reader at the bottom follows) is r
 Spec `explore-6-send-leaves-own-message-out-of-view.spec.ts`: `the member's own message is out of view: the feed stayed where it
 was ... Expected: in viewport  Received: viewport ratio 0`.
 
-**7. The message box starts below the fold on ordinary windows.** *Usability.*
+**7. The message box starts below the fold on ordinary windows.** *Usability.* **FIXED 2026-10-14 (`a69d030`).**
 Did: opened Chat at 1024 x 768 (the pane) and at 1280 x 720 (the spec). Expected: write without scrolling the page. Happened: the
 box starts at about y 830 of 768 (and below 720 at 1280 x 720); `.feed__log` is `clamp(12rem, 60vh, 48rem)` under a header, a
 navigation bar and the conversation list, so the page needs about 1,350 px of window to show the box. Compose-and-read-the-latest
