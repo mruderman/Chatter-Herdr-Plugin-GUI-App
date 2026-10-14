@@ -28,6 +28,7 @@
 - **D9 closed:** MIT confirmed (the `LICENSE` holder reads "Cyan Society" and was not corrected).
 - **D11 closed:** production is `baremetalcyansociety`, account `letta`, Herdr `default` session, one Herdr server. Test hosts: any other tailnet machine; development is on this laptop (Herdr 0.9.1; production has 0.9.3, same protocol 22).
 - **D20 browsers:** Edge, Chrome, Firefox or Brave, any one; tested in Chromium.
+- **D21 shared account:** the bridge runs as `letta` with the agents; accepted for the MVP (2026-10-14).
 - **Read-only SSH to production as `letta`** is authorised for checks only (list in `docs/plans/deploy-verify.md`). Done once, below.
 - Prime Agent loads skills by progressive disclosure (scan, metadata in the system prompt, the model reads `SKILL.md` through `ipython`): recorded in V4 of the plan, told by Flan, not verified by me.
 - V4 agents: ideally a test Letta agent and a test Prime Agent (Flan provides), plus Claude Code and Codex CLI.
@@ -41,7 +42,7 @@ Chatter is upstream 0.19.0 at `0edc18f`, the commit the tests ran against, with 
 1. **Test agents for V4:** a test Letta agent and a test Prime Agent (Claude Code and Codex CLI I can start with on the laptop).
 2. **Still open:** whether "Prime Agent" (Grace's harness) is Qredence's fleet-prime-agent, and where Grace runs (SPEC Q1 says outside Herdr; a process on production shows a Herdr worktree path for `agents-grace`).
 3. **Pushes: closed.** Flan pushed `main` and `deploy-verify` on 2026-10-13 and disabled the `toru-claude-agents` plugin (its push guard and its `megg` memory server) and `agentmail` on this machine; both are synced from claude.ai, which cannot uninstall them from here, so removing them for good is done on claude.ai. This project also turns off 15 more plugins in `.claude/settings.local.json` (not committed; listed in `.git/info/exclude`), so other projects keep them.
-4. **A risk to accept knowingly (proposed R-number):** on production the bridge and the agents share the account `letta`, because the bridge must write Chatter's state through the `chatter` CLI and reach Herdr's socket. The bridge's policy (DM privacy, `@everyone`, revocation) governs the HTTP path only; any process running as `letta` can read every Chatter database and edit the bridge's registry. Recommended default: accept for the MVP, keep it written in SPEC section 10, and do not offer the bridge as protection against an agent that has a shell on that host.
+4. **D21, closed (Flan, 2026-10-14): the shared `letta` account is accepted for the MVP.** On production the bridge and the agents run as the same account, so the bridge's policy governs the HTTP path only; any process running as `letta` can read every Chatter database and edit the bridge's registry. Recorded in SPEC section 2 and section 10; the bridge is not offered as protection against an agent that has a shell on that host. A separate account for the bridge is the after-MVP option.
 
 ## Next
 1. Start `deploy-verify` (branch from `main`): V0 isolate a throwaway Herdr session on the laptop, V1 build script, V2 unit and runbook, V3 real-Herdr smoke with the production-identical Chatter copy, V4 real agents, V5 exploratory GUI pass, V6 close. Production install is V7 and needs a separate go-ahead and a window.
