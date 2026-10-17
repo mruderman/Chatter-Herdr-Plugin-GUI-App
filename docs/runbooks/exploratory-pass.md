@@ -1,6 +1,6 @@
 # Exploratory GUI pass (V5 of the deploy-and-verify slice)
 
-> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`): their specs moved to `client/e2e/` and now guard the fix, and `npm run e2e:pending` fails the remaining 8 (`explore-2` to `explore-6` and `explore-8` to `explore-10`), each for the reason it names; the default suite is 43 specs. The text below is the pass as it was found.
+> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`) and **finding 10 on 2026-10-16** (commit `99cc611`): their specs moved to `client/e2e/` and now guard the fixes. Finding 9 is in progress (its bridge route is merged; the client half is T19b). `npm run e2e:pending` fails the remaining ones, each for the reason it names. The text below is the pass as it was found.
 >
 > When another finding is fixed, move its spec into `client/e2e/` and change its harness imports from `../e2e/harness/` to `./harness/`.
 
@@ -172,7 +172,7 @@ with someone is older has no "DM with X" button, and nothing hints that "Load ol
 Spec `explore-9-old-dm-not-listed.spec.ts`: `Ann has a private conversation with Bob, but no button for it is on the list ...
 element(s) not found`.
 
-**10. The bridge's warnings and delivery status are dropped.** *Usability.*
+**10. The bridge's warnings and delivery status are dropped.** *Usability.* **FIXED 2026-10-16 (`99cc611`).**
 Did: sent `@nobodyhere ...` as a member and a DM to `codex`. Expected: the sender learns that nobody was notified (or that the
 agent's message is queued). Happened: a normal successful send. The API answers 201 with `warnings: ["mention @nobodyhere2 matches
 no agent in this repo - not pushed"]` and, for the DM, `delivery: "queued"`; the client parses both (`api/guards.ts`) and

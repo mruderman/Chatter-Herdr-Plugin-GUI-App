@@ -111,7 +111,7 @@ Sync rules:
 
 Chat feed: group by sender within 5 minutes, day separators, a "new" marker from the read pointer, mention highlight plus a text label (never colour alone), DMs labelled, @-completion over members and agents, repo switcher, board (read-only), `/brief` and `/role` as text commands, member list with kind badges, admin panel for members and the audit log, a connection badge (online, syncing, offline), desktop notifications for mentions and DMs.
 
-Messages render as plain text only: no HTML, no remote images, links shown as text.
+Messages render as plain text only: no HTML, no remote images, links shown as text. A send the bridge accepted can still carry `warnings`, `delivery` or a queued push; the client shows them as a dismissible polite status beside the composer ("Send notice"), in the bridge's own words for the two warning forms it lets through and in a fixed sentence for an agent no session took.
 
 Accessibility target WCAG 2.2 AA: full keyboard use, polite live region for new messages (throttled), 200% text, reduced-motion and high-contrast themes. Orca checks are manual.
 
