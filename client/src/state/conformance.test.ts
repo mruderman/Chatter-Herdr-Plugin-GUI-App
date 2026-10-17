@@ -10,6 +10,7 @@ import { parseDirectory, parseMessagesPage, parseRepos } from '../api/guards';
 import { CHANNEL, type Directory, type Message } from '../api/types';
 import { createFakeStore, FAKE_TOKEN, type FakeMember } from './fake';
 import { FakeBridge, MAIN_REPO, SITE_REPO } from './fake-api';
+import { NOTICE_LEAD, queuedText } from './send-notice';
 import { createStore } from './store';
 import type { IncomingMessage, Store, StoreSnapshot } from './types';
 
@@ -464,6 +465,133 @@ describe.each([
       expect(await d.store.send({ to: CHANNEL, body: 'hi' })).toBe(false);
       expect(d.now().sendError).toBeNull();
       expect(d.written()).toBe(0);
+    });
+  });
+
+  // SPEC section 5: a send the bridge accepts can still carry a warning (Chatter's notice that a mention
+  // reaches nobody), and a message to an agent that no live session took is "queued". The sender is told, in
+  // plain words beside the composer and in the Announcements region, until the next send, another
+  // conversation or repo, or dismissal; never on a timer.
+  describe('what the bridge says about a send it accepted (the send notice)', () => {
+    const noAgent = (name: string): string => `mention @${name} matches no agent in this repo — not pushed`;
+
+    it('has no notice before anything is sent, after an ordinary send, or after a DM to a member', async () => {
+      const d = await make();
+      expect(d.now().sendNotice).toBeNull();
+      expect(await d.store.send({ to: CHANNEL, body: 'good morning @mira' })).toBe(true);
+      expect(d.now().sendNotice).toBeNull();
+      expect(await d.store.send({ to: 'mira', body: 'a private word' })).toBe(true);
+      expect(d.now().sendNotice).toBeNull();
+      expect(d.now().announcement).toBeNull();
+    });
+
+    it('shows the warning of a mention that reaches nobody as the bridge gave it, announces it, and still accepts the send', async () => {
+      const d = await make();
+      expect(await d.store.send({ to: CHANNEL, body: 'is anybody there @nobodyhere' })).toBe(true);
+      expect(d.now().messages.at(-1)?.body).toBe('is anybody there @nobodyhere');
+      expect(d.now().sendNotice).toEqual({ lead: NOTICE_LEAD, lines: [noAgent('nobodyhere')], seq: 1 });
+      expect(d.now().announcement).toEqual({ text: `${NOTICE_LEAD} ${noAgent('nobodyhere')}`, seq: 1 });
+      expect(d.now().sendError).toBeNull();
+      expect(Object.isFrozen(d.now().sendNotice)).toBe(true);
+    });
+
+    it('says that a DM to an agent was saved but not delivered, and a mention that could only be queued the same way', async () => {
+      const d = await make();
+      expect(await d.store.send({ to: 'codex', body: 'ping' })).toBe(true);
+      expect(d.now().sendNotice?.lines).toEqual([queuedText('codex')]);
+      expect(d.now().selectedConversation).toBe(CHANNEL);
+      expect(await d.store.send({ to: CHANNEL, body: 'hello @codex' })).toBe(true);
+      expect(d.now().sendNotice).toEqual({ lead: NOTICE_LEAD, lines: [queuedText('codex')], seq: 2 });
+    });
+
+    it('lists a warning before the agents that were only queued', async () => {
+      const d = await make();
+      expect(await d.store.send({ to: CHANNEL, body: '@codex and @nobodyhere' })).toBe(true);
+      expect(d.now().sendNotice?.lines).toEqual([noAgent('nobodyhere'), queuedText('codex')]);
+    });
+
+    it('stays while time passes: no timer takes it away', async () => {
+      const d = await make();
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      const shown = d.now().sendNotice;
+      await d.advance(60 * 60_000);
+      expect(d.now().sendNotice).toBe(shown);
+    });
+
+    it('is replaced by the next send: cleared by an ordinary one, and a new notice of the same text has a new sequence number', async () => {
+      const d = await make();
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      expect(await d.store.send({ to: CHANNEL, body: 'plain' })).toBe(true);
+      expect(d.now().sendNotice).toBeNull();
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      expect(d.now().sendNotice?.seq).toBe(2);
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      expect(d.now().sendNotice?.seq).toBe(3);
+      expect(d.now().announcement?.seq).toBe(3);
+    });
+
+    it('is cleared by a send that is refused, which shows its own error instead', async () => {
+      const d = await make();
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      expect(await d.store.send({ to: CHANNEL, body: '@everyone wake up' })).toBe(false);
+      expect(d.now().sendNotice).toBeNull();
+      expect(d.now().sendError).not.toBeNull();
+    });
+
+    it('is cleared by opening another conversation, and kept for the conversation the message went to', async () => {
+      const d = await make();
+      await d.store.send({ to: 'codex', body: 'ping' });
+      expect(d.now().sendNotice).not.toBeNull();
+      d.open('DM with codex');
+      expect(d.now().sendNotice?.lines).toEqual([queuedText('codex')]);
+      d.open('#chat');
+      expect(d.now().sendNotice).toBeNull();
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      d.open('DM with mira');
+      expect(d.now().sendNotice).toBeNull();
+    });
+
+    it('is cleared by selecting another repo', async () => {
+      const d = await make();
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      d.store.selectRepo(SITE_REPO);
+      await d.settle();
+      expect(d.now().sendNotice).toBeNull();
+    });
+
+    it('is cleared by dismissing it, which publishes once and does nothing when there is none', async () => {
+      const d = await make();
+      const before = d.now();
+      d.store.dismissSendNotice();
+      expect(d.now()).toBe(before);
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      d.store.dismissSendNotice();
+      expect(d.now().sendNotice).toBeNull();
+      const after = d.now();
+      d.store.dismissSendNotice();
+      expect(d.now()).toBe(after);
+    });
+
+    it('goes with the member on sign-out', async () => {
+      const d = await make();
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      d.store.signOut();
+      expect(d.now().sendNotice).toBeNull();
+      expect(await d.store.signIn(d.token)).toBe(true);
+      await d.settle();
+      expect(d.now().sendNotice).toBeNull();
+    });
+
+    it('is announced at once, even right after someone else\'s message was, and the 3 seconds run from it', async () => {
+      const d = await make();
+      await d.receive({ from: 'mira', body: 'hello' });
+      expect(d.now().announcement).toEqual({ text: 'mira: hello', seq: 1 });
+      await d.store.send({ to: CHANNEL, body: '@nobodyhere' });
+      expect(d.now().announcement).toEqual({ text: `${NOTICE_LEAD} ${noAgent('nobodyhere')}`, seq: 2 });
+      await d.receive({ from: 'mira', body: 'again' });
+      expect(d.now().announcement?.seq).toBe(2);
+      await d.advance(3_000);
+      expect(d.now().announcement).toEqual({ text: 'mira: again', seq: 3 });
     });
   });
 

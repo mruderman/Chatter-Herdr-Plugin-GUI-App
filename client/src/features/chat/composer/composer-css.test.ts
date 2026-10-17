@@ -68,6 +68,20 @@ describe('composer.css', () => {
     expect(ruleFor('.mention-option')?.declarations.get('min-block-size')).toBe('var(--target-min)');
   });
 
+  it('lets the send notice wrap its button under the text and shrink its text, so a long warning cannot widen the page', () => {
+    const notice = ruleFor('.composer .composer__notice');
+    expect(notice?.declarations.get('display')).toBe('flex');
+    expect(notice?.declarations.get('flex-wrap')).toBe('wrap');
+    expect(notice?.declarations.get('margin')).toBe('0');
+    // So that scrolling it into view leaves room under it instead of putting its border on the window's edge.
+    expect(notice?.declarations.get('scroll-margin-block-end')).toBe('var(--space-5)');
+    expect(ruleFor('.composer__notice-text')?.declarations.get('min-inline-size')).toBe('0');
+  });
+
+  it('sets the send notice\'s lead in bold, so the words and not only the tint say what it is', () => {
+    expect(ruleFor('.composer__notice-lead')?.declarations.get('font-weight')).toBe('700');
+  });
+
   it('marks the read-only notice with a dashed border as well as its words', () => {
     expect(ruleFor('.composer__read-only')?.declarations.get('border')).toMatch(/dashed/);
   });

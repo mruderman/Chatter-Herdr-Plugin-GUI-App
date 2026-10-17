@@ -7,8 +7,9 @@
 import { ManualClock } from '../api/clock';
 import { ERROR_CODES } from '../api/errors';
 import { parseDirectory, parseMe, parseMessagesPage, parseRepos } from '../api/guards';
-import { CHANNEL, type Directory, type Me, type Message } from '../api/types';
+import { CHANNEL, type Directory, type Me, type Message, type SendResult } from '../api/types';
 import { body, recordedError } from '../../test/fixtures/recorded';
+import { announcementOf, makeNotice } from './send-notice';
 import type {
   Announcement,
   Connection,
@@ -18,6 +19,7 @@ import type {
   IncomingMessage,
   RepoChoice,
   SendDraft,
+  SendNotice,
   Session,
   Store,
   StoreSnapshot,
@@ -251,6 +253,65 @@ export function refuseWrite(draft: SendDraft, me: Me, directory: Directory): Ref
   return null;
 }
 
+/** The mentions of a post as Chatter's postToChat reads them: case-sensitive, so a capital letter ends the token. */
+const CHATTER_MENTION = /@([a-z0-9_-]+)/g;
+
+/**
+ * Chatter's resolveRecipient for a mention (`soft`): an agent's exact name, or the one agent whose name the
+ * token is the start of, ignoring case. Chatter also counts the human's name among the candidates, which the
+ * fake does not model: for the admin it is their own handle, and a mention that only starts it resolves to
+ * the sender and gets no warning (bridge-parity.test.ts, "@f", where the fake warns or pushes instead).
+ */
+function resolveMention(token: string, agents: readonly string[]): string | null {
+  if (agents.includes(token)) return token;
+  const lower = token.toLowerCase();
+  const begun = agents.filter((name) => name.toLowerCase().startsWith(lower));
+  return begun.length === 1 ? (begun[0] ?? null) : null;
+}
+
+/**
+ * What the bridge answers a send it accepted with, besides the id (bridge/src/server.js `sendMessage`):
+ * who was mentioned, the delivery of a DM to an agent, the agents a post pushed to, and Chatter's warnings.
+ * The scripted bridge (fake-api.ts) answers with it and the fake store makes its send notice from it, so that
+ * there is one copy; bridge-parity.test.ts compares it with a real bridge over real Chatter.
+ *
+ * The world it models has no live Herdr pane: an agent addressed is never delivered to, so a DM to an agent
+ * is `queued` and a post's push to one is `<name> (queued)`. A warning is Chatter's, for each occurrence of
+ * a mention that is no agent, read as Chatter reads it (CHATTER_MENTION), minus the ones the bridge drops
+ * because the mention is an active member's handle. As in refuseWrite, the directory stands for the roster:
+ * it lists departed agents too, so a mention of one is taken for a hit here and is not one there.
+ */
+export function answerTo(draft: SendDraft, me: Me, directory: Directory): Omit<SendResult, 'id'> {
+  const members = new Set(directory.members.map((member) => member.handle));
+  if (draft.to !== CHANNEL) {
+    return {
+      pushed: [],
+      warnings: [],
+      mentioned_members: members.has(draft.to) ? [draft.to] : [],
+      delivery: directory.agents.includes(draft.to) ? 'queued' : null,
+    };
+  }
+  const text = draft.body.trim();
+  const warnings: string[] = [];
+  const pushedTo = new Set<string>();
+  for (const match of text.matchAll(CHATTER_MENTION)) {
+    const token = match[1] ?? '';
+    if (token === EVERYONE) continue;
+    const hit = resolveMention(token, directory.agents);
+    if (hit !== null) {
+      if (hit !== me.handle) pushedTo.add(hit);
+    } else if (!members.has(token)) {
+      warnings.push(`mention @${token} matches no agent in this repo — not pushed`);
+    }
+  }
+  return {
+    pushed: [...pushedTo].map((name) => `${name} (queued)`),
+    warnings,
+    mentioned_members: mentionsOf(text).handles.filter((handle) => members.has(handle) && handle !== me.handle),
+    delivery: null,
+  };
+}
+
 export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
   const as = options.as ?? 'thom';
   const pageSize = options.pageSize ?? Number.POSITIVE_INFINITY;
@@ -270,6 +331,9 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
   let selectedConversation: ConversationId | null = null;
   let marker: number | null = null;
   let sendError: ErrorInfo | null = null;
+  // The notice about the last accepted send and the conversation its message went to, as in store.ts.
+  let sendNotice: { readonly notice: SendNotice; readonly conversation: ConversationId } | null = null;
+  let noticeSeq = 0;
   let announcement: Announcement | null = null;
   let queue: Pending[] = [];
   let lastAnnouncedAt = Number.NEGATIVE_INFINITY;
@@ -328,6 +392,7 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       hasMore: repo ? repo.loaded < repo.messages.length : false,
       newMarkerBeforeId: marker,
       sendError,
+      sendNotice: signedIn ? (sendNotice?.notice ?? null) : null,
       announcement,
     });
   }
@@ -369,6 +434,7 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
     selectedConversation = null;
     marker = null;
     sendError = null;
+    sendNotice = null;
     announcement = null;
     queue = [];
     cancelFlush?.();
@@ -465,6 +531,7 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       selectedRepo = key;
       selectedConversation = CHANNEL;
       sendError = null;
+      sendNotice = null;
       queue = [];
       cancelFlush?.();
       cancelFlush = null;
@@ -479,6 +546,7 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       if (!conversationsOf(repo, member).some((conversation) => conversation.id === id)) return;
       selectedConversation = id;
       sendError = null;
+      if (sendNotice !== null && sendNotice.conversation !== id) sendNotice = null;
       fixMarker();
       publish();
     },
@@ -487,6 +555,8 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       const repo = current();
       const member = me();
       if (disposed || !repo || !member || !directory) return Promise.resolve(false);
+      // A new send replaces whatever the last one left, whether this one is refused or not.
+      sendNotice = null;
       const refused = refuseWrite(draft, member, directory);
       if (refused) {
         sendError = { code: refused.code, message: refused.message };
@@ -495,8 +565,9 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       }
       const text = draft.body.trim();
       const { handles, everyone } = mentionsOf(text);
+      const id = repo.maxId + 1;
       append(repo, {
-        id: repo.maxId + 1,
+        id,
         from: member.handle,
         to: draft.to,
         body: text,
@@ -508,8 +579,22 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       });
       sent.push({ to: draft.to, body: draft.body });
       sendError = null;
+      const notice = makeNotice(draft, { id, ...answerTo(draft, member, directory) }, noticeSeq + 1);
+      if (notice) {
+        noticeSeq += 1;
+        sendNotice = { notice, conversation: draft.to === CHANNEL ? CHANNEL : dmId(member.handle, draft.to) };
+        // Said at once and counted as the last announcement, as the real store does (announce.ts, say).
+        announcement = { text: announcementOf(notice), seq: (announcement?.seq ?? 0) + 1 };
+        lastAnnouncedAt = clock.now();
+      }
       publish();
       return Promise.resolve(true);
+    },
+
+    dismissSendNotice() {
+      if (disposed || sendNotice === null) return;
+      sendNotice = null;
+      publish();
     },
 
     loadOlder() {

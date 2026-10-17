@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { recordedError } from '../../../../test/fixtures/recorded';
 import { cleanup, render } from '../../../../test/render';
 import { createFakeStore, type FakeStoreOptions } from '../../../state/fake';
+import { NOTICE_LEAD, queuedText } from '../../../state/send-notice';
 import { CHANNEL, type SendDraft, type Store, type StoreSnapshot } from '../../../state/types';
 import { SKIP_TARGET } from '../../shell';
 import { AXE_OPTIONS, expectNoAxeViolations, setupUser } from '../../shell/test-utils';
@@ -37,6 +38,11 @@ const suggestions = (): HTMLElement | null => screen.queryByRole('listbox', { na
 const options = (): HTMLElement[] => within(screen.getByRole('listbox', { name: COMPOSER_TEXT.suggestions })).getAllByRole('option');
 const optionNames = (): string[] => options().map((option) => option.textContent ?? '');
 const sendError = (): HTMLElement | null => screen.queryByRole('alert', { name: COMPOSER_TEXT.sendError });
+const sendNotice = (): HTMLElement | null => screen.queryByRole('status', { name: COMPOSER_TEXT.sendNotice });
+const findSendNotice = (): Promise<HTMLElement> => screen.findByRole('status', { name: COMPOSER_TEXT.sendNotice });
+const dismissButton = (): HTMLElement | null => screen.queryByRole('button', { name: COMPOSER_TEXT.dismissNotice });
+// Chatter 0.19.0 writes the dash as U+2014 (bridge/src/server.js KNOWN_WARNINGS).
+const NO_AGENT = (name: string): string => `mention @${name} matches no agent in this repo — not pushed`;
 const findSendError = (): Promise<HTMLElement> => screen.findByRole('alert', { name: COMPOSER_TEXT.sendError });
 const describedBy = (): string[] => box().getAttribute('aria-describedby')?.split(' ') ?? [];
 const refusal = (name: string): string => `${COMPOSER_TEXT.sendErrorPrefix}${recordedError(name).message}`;
@@ -584,8 +590,192 @@ describe('composer: read-only and unavailable states (ui-contract section 8)', (
   });
 });
 
+describe('composer: what the bridge said about a send it accepted (the send notice)', () => {
+  it('shows nothing after an ordinary send', async () => {
+    const { user } = setup();
+    await user.type(box(), 'good morning{Enter}');
+    await waitFor(() => expect(box().value).toBe(''));
+    expect(sendNotice()).toBeNull();
+    expect(dismissButton()).toBeNull();
+  });
+
+  it('shows the warning of a mention that reaches nobody as a status, in the form, after the box was cleared', async () => {
+    const { user } = setup();
+    await user.type(box(), 'is anyone there @nobodyhere{Enter}');
+    const notice = await findSendNotice();
+    expect(notice.textContent).toBe(`${NOTICE_LEAD}${NO_AGENT('nobodyhere')}`);
+    expect(screen.getByRole('form', { name: COMPOSER_TEXT.form }).contains(notice)).toBe(true);
+    expect(box().value).toBe('');
+    // The send went through, so this is not the "Send error" alert, and nothing is an alert at all.
+    expect(sendError()).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    // Words say what it is: the colour of the box is not the only cue.
+    expect(notice.textContent).toMatch(/sent/i);
+  });
+
+  it('says that a DM to an agent was saved but not delivered', async () => {
+    const { user } = setup();
+    await user.selectOptions(to(), 'codex');
+    await user.type(box(), 'run the tests{Enter}');
+    expect((await findSendNotice()).textContent).toBe(`${NOTICE_LEAD}${queuedText('codex')}`);
+  });
+
+  it('never moves focus: the message box keeps it when the notice appears', async () => {
+    const { user } = setup();
+    await user.type(box(), '@nobodyhere{Enter}');
+    await findSendNotice();
+    expect(document.activeElement).toBe(box());
+  });
+
+  it('shows a warning as the text it is, never as markup', async () => {
+    const hostile = '<img src=x onerror="window.pwned = 1">';
+    const fake = createFakeStore();
+    const base = fake.getSnapshot();
+    mount({ ...fake, getSnapshot: () => ({ ...base, sendNotice: { lead: NOTICE_LEAD, lines: [hostile, '<b>bold</b>'], seq: 1 } }) });
+    const notice = await findSendNotice();
+    expect(notice.textContent).toBe(`${NOTICE_LEAD}${hostile}<b>bold</b>`);
+    expect(notice.querySelector('img, b, script')).toBeNull();
+    expect(document.querySelector('img')).toBeNull();
+    expect((window as unknown as { pwned?: number }).pwned).toBeUndefined();
+  });
+
+  it('is removed by its button, which puts focus in the message box and tells the store', async () => {
+    const { fake, user } = setup();
+    const dismiss = vi.spyOn(fake, 'dismissSendNotice');
+    await user.type(box(), '@nobodyhere{Enter}');
+    await findSendNotice();
+    const button = dismissButton();
+    if (!button) throw new Error('no Dismiss notice button');
+    await user.click(button);
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(sendNotice()).toBeNull();
+    expect(dismissButton()).toBeNull();
+    // The button that had focus is gone; leaving focus on the page body would lose the keyboard's place.
+    expect(document.activeElement).toBe(box());
+  });
+
+  it('is dismissed by keyboard: Tab to the button, Enter', async () => {
+    const { user } = setup();
+    await user.type(box(), '@nobodyhere{Enter}');
+    await findSendNotice();
+    sendButton().focus();
+    await user.tab();
+    expect(document.activeElement).toBe(dismissButton());
+    await user.keyboard('{Enter}');
+    expect(sendNotice()).toBeNull();
+    expect(document.activeElement).toBe(box());
+  });
+
+  it('stays while the member types, and is replaced by the next send', async () => {
+    const { user } = setup();
+    await user.type(box(), '@nobodyhere{Enter}');
+    const first = await findSendNotice();
+    await user.type(box(), 'a second thought');
+    expect(sendNotice()).toBe(first);
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(first.isConnected).toBe(false));
+    expect(sendNotice()).toBeNull();
+  });
+
+  it('is a new element when the same notice comes again, so it is read again', async () => {
+    const { user } = setup();
+    await user.type(box(), '@nobodyhere{Enter}');
+    const first = await findSendNotice();
+    await user.type(box(), '@nobodyhere{Enter}');
+    await waitFor(() => expect(first.isConnected).toBe(false));
+    const second = await findSendNotice();
+    expect(second).not.toBe(first);
+    expect(second.textContent).toBe(first.textContent);
+  });
+
+  it('goes when another conversation is opened', async () => {
+    const { store, user } = setup();
+    await user.type(box(), '@nobodyhere{Enter}');
+    await findSendNotice();
+    select(store, 'DM with mira');
+    expect(sendNotice()).toBeNull();
+  });
+
+  // The notice sits under Send, which is the bottom of the page: on a window of ordinary height it could start
+  // below the fold, so the composer scrolls the page to show it, but never so far that the focused box leaves
+  // the window. jsdom has no layout, so the window's height and the rectangles are stood in for.
+  const WINDOW_HEIGHT = 700;
+  /** The rectangles of the notice and of the message box, as a browser would give them, and a spy on the page's scroll. */
+  function layout(noticeBottom: number, boxTop: number) {
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: WINDOW_HEIGHT });
+    const rect = (top: number, bottom: number): DOMRect => ({ top, bottom, left: 0, right: 0, x: 0, y: top, width: 0, height: bottom - top, toJSON: () => ({}) });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('composer__notice')) return rect(noticeBottom - 100, noticeBottom);
+      if (this.tagName === 'TEXTAREA') return rect(boxTop, boxTop + 72);
+      return rect(0, 0);
+    });
+    return vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+  }
+  function restoreLayout(): void {
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(document.documentElement, 'clientHeight');
+  }
+
+  it('scrolls the page just far enough to show the end of a new notice, at once, once for each, and leaves focus in the box', async () => {
+    const scroll = layout(WINDOW_HEIGHT + 40, 300);
+    try {
+      const { user } = setup();
+      await user.type(box(), '@nobodyhere{Enter}');
+      const first = await findSendNotice();
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(scroll).toHaveBeenLastCalledWith({ top: 40, behavior: 'instant' });
+      expect(document.activeElement).toBe(box());
+      // Typing again does not scroll it back into view: only a new notice does.
+      await user.type(box(), 'a second thought');
+      expect(scroll).toHaveBeenCalledTimes(1);
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(first.isConnected).toBe(false));
+      await user.type(box(), '@nobodyhere{Enter}');
+      await findSendNotice();
+      expect(scroll).toHaveBeenCalledTimes(2);
+    } finally {
+      restoreLayout();
+    }
+  });
+
+  it('scrolls no further than keeps the message box in the window, where the composer is taller than the window', async () => {
+    const scroll = layout(WINDOW_HEIGHT + 900, 60);
+    try {
+      const { user } = setup();
+      await user.type(box(), '@nobodyhere{Enter}');
+      await findSendNotice();
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(scroll).toHaveBeenLastCalledWith({ top: 60, behavior: 'instant' });
+    } finally {
+      restoreLayout();
+    }
+  });
+
+  it('scrolls nothing when the notice is already in the window, or when there is none', async () => {
+    const scroll = layout(WINDOW_HEIGHT - 10, 300);
+    try {
+      const { user } = setup();
+      await user.type(box(), '@nobodyhere{Enter}');
+      await findSendNotice();
+      await user.type(box(), 'good morning{Enter}');
+      await waitFor(() => expect(sendNotice()).toBeNull());
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      restoreLayout();
+    }
+  });
+
+  it('is not part of what the message box is described by, and sits after Send in the reading order', async () => {
+    const { user } = setup();
+    await user.type(box(), '@nobodyhere{Enter}');
+    const notice = await findSendNotice();
+    expect(describedBy()).toEqual([screen.getByText(COMPOSER_TEXT.hint).id]);
+    expect(sendButton().compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
 describe('composer: accessibility and markup (ui-contract sections 6 and 7)', () => {
-  it('has no axe violations idle, read-only, with a refusal showing, or disabled, and no style attributes', async () => {
+  it('has no axe violations idle, read-only, with a refusal or a send notice showing, or disabled, and no style attributes', async () => {
     const admin = setup({ as: 'flan' });
     expectNoStyleAttributes();
     await expectNoAxeViolations();
@@ -597,6 +787,13 @@ describe('composer: accessibility and markup (ui-contract sections 6 and 7)', ()
     const member = setup();
     await member.user.type(box(), '@everyone no{Enter}');
     await findSendError();
+    expectNoStyleAttributes();
+    await expectNoAxeViolations();
+    cleanup();
+
+    const noticed = setup();
+    await noticed.user.type(box(), '@nobodyhere{Enter}');
+    await findSendNotice();
     expectNoStyleAttributes();
     await expectNoAxeViolations();
     cleanup();

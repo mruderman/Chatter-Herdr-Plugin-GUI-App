@@ -1,13 +1,16 @@
-// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 10). Written to FAIL on the current code.
+// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 10). Guards the fix: it failed on the code before it.
 // A send answers 201 `{ id, pushed, warnings, mentioned_members, delivery }` (SPEC section 5). `warnings` carries
-// Chatter's own notice when a mention reaches nobody ("mention @x matches no agent in this repo - not
-// pushed"), and `delivery` says "queued" when an agent was addressed but no pane was live. The client parses
-// both (api/guards.ts) and drops them: the store's send() resolves a bare boolean. A member who mistypes an
-// agent's name sees a normal, successful send and believes the agent was told. Runs against its own bridge.
-import { loadBridgeHelpers, type BridgeEnv } from '../e2e/harness/bridge';
-import { expect, openChat, send, signIn, test } from '../e2e/harness/fixtures';
-import { ui } from '../e2e/harness/ui';
-import { POLL_MS, type World } from '../e2e/harness/world';
+// Chatter's own notice when a mention reaches nobody ("mention @x matches no agent in this repo — not pushed"), and
+// `delivery` says "queued" when an agent was addressed but no pane was live. The client parsed both (api/guards.ts)
+// and dropped them: the store's send() resolved a bare boolean, so a member who mistyped an agent's name saw a
+// normal, successful send and believed the agent was told. Now the composer shows each warning as the bridge gave
+// it, as a status beside the message box (send-notice.spec.ts guards the rest of the notice: the queued wording, the
+// dismissal, focus, axe and the first screen). The locator is scoped to the composer because the same words are also
+// in the visually hidden Announcements region, and a page-wide getByText would find both. Runs against its own bridge.
+import { loadBridgeHelpers, type BridgeEnv } from './harness/bridge';
+import { expect, openChat, send, signIn, test } from './harness/fixtures';
+import { ui } from './harness/ui';
+import { POLL_MS, type World } from './harness/world';
 
 async function privateBridge(world: World): Promise<BridgeEnv> {
   const { makeEnv } = await loadBridgeHelpers();
@@ -29,7 +32,7 @@ test('explore 10: a mention that reaches nobody is reported to the sender, not o
     await send(page, '@nobodyhere is anybody there?');
     await expect(ui.feed(page).getByText('@nobodyhere is anybody there?')).toBeVisible();
     await expect(
-      page.getByText(/matches no agent/i),
+      ui.composer(page).getByText(/matches no agent/i),
       'the bridge warned that nobody was notified; the page showed nothing',
     ).toBeVisible({ timeout: 3_000 });
   } finally {

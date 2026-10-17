@@ -44,6 +44,16 @@ export class Announcer {
     }
   }
 
+  /**
+   * A status of the member's own doing (the notice about their send): said at once, never held behind the
+   * throttle or merged into a burst, since it answers something they just did. It counts as the last
+   * announcement, so a message that arrives right after waits its 3 s as usual.
+   */
+  say(text: string): void {
+    this.latest = { text, seq: (this.latest?.seq ?? 0) + 1 };
+    this.lastAt = this.clock.now();
+  }
+
   /** Drops what is held, as when another repo is selected; the last announcement stays. */
   drop(): void {
     this.queue = [];

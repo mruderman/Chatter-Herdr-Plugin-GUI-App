@@ -24,7 +24,7 @@ import {
   type SendResult,
 } from '../api/types';
 import { body, recordedError } from '../../test/fixtures/recorded';
-import { FAKE_MEMBERS, mentionsOf, refuseWrite, type FakeMember } from './fake';
+import { answerTo, FAKE_MEMBERS, mentionsOf, refuseWrite, type FakeMember } from './fake';
 
 export const BRIDGE_ROUTES = {
   me: 'me',
@@ -462,19 +462,9 @@ export class FakeBridge {
     this.table(repo);
     const refused = refuseWrite(draft, member, this.served);
     if (refused) throw new ApiError(refused.status, refused.code, refused.message);
-    const text = draft.body.trim();
-    const { handles } = mentionsOf(text);
-    const members = new Set(this.served.members.map((m) => m.handle));
-    let mentioned: string[];
-    let delivery: SendResult['delivery'] = null;
-    if (draft.to === CHANNEL) {
-      mentioned = handles.filter((h) => members.has(h) && h !== member.handle);
-    } else {
-      mentioned = members.has(draft.to) ? [draft.to] : [];
-      if (this.served.agents.includes(draft.to)) delivery = 'queued';
-    }
-    const written = this.write({ from: member.handle, to: draft.to, body: text, repo });
-    return { id: this.sendIdNull ? null : written.id, pushed: [], warnings: [], mentioned_members: mentioned, delivery };
+    const written = this.write({ from: member.handle, to: draft.to, body: draft.body.trim(), repo });
+    // The answer's other parts are fake.ts's answerTo, one copy shared with the fake store.
+    return { id: this.sendIdNull ? null : written.id, ...answerTo(draft, member, this.served) };
   }
 
   private stream(member: Me, repo: string, lastEventId: number | null, signal: AbortSignal): ReadableStream<Uint8Array> {

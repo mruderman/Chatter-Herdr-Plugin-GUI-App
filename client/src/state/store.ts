@@ -8,15 +8,17 @@ import { systemClock, type Clock } from '../api/clock';
 import type { StreamTiming } from '../api/stream';
 import { CHANNEL, type Directory, type Me, type Message, type Repo, type SendResult } from '../api/types';
 import { Announcer } from './announce';
-import { belongsTo, CHANNEL_CONVERSATION, conversationOf, ordered } from './conversations';
+import { belongsTo, CHANNEL_CONVERSATION, conversationOf, dmId, ordered } from './conversations';
 import { classify, keepTrying, retryDelay, UNAUTHORIZED } from './failure';
 import { RepoSync, type SyncHost } from './repo-sync';
+import { announcementOf, makeNotice } from './send-notice';
 import type {
   Connection,
   ConversationId,
   ErrorInfo,
   IncomingMessage,
   SendDraft,
+  SendNotice,
   Session,
   Store,
   StoreSnapshot,
@@ -103,6 +105,7 @@ function sameSnapshot(a: StoreSnapshot, b: StoreSnapshot): boolean {
     && a.hasMore === b.hasMore
     && a.newMarkerBeforeId === b.newMarkerBeforeId
     && a.sendError === b.sendError
+    && a.sendNotice === b.sendNotice
     && a.announcement === b.announcement;
 }
 
@@ -122,6 +125,8 @@ class Live {
   selectedConversation: ConversationId | null = null;
   marker: number | null = null;
   sendError: ErrorInfo | null = null;
+  /** What the bridge said about the last accepted send, with the conversation its message went to: opening another takes it away. */
+  sendNotice: { readonly notice: SendNotice; readonly conversation: ConversationId } | null = null;
   /** The bridge revoked the member: everything stays readable and nothing is asked any more. */
   revoked = false;
   /** Bumped on every change of repo or conversation, so a late send failure is not shown in another one. */
@@ -184,6 +189,8 @@ export function createStore(options: StoreOptions = {}): Store {
   let live: Live | null = null;
   // Bumped whenever the session changes hands, so an answer to an older /v1/me is dropped.
   let attempt = 0;
+  // The sequence number of the last send notice, so that a notice of the same text is still a new one.
+  let noticeSeq = 0;
   let asking: AbortController | null = null;
   let askAgain: (() => void) | null = null;
   let disposed = false;
@@ -235,6 +242,7 @@ export function createStore(options: StoreOptions = {}): Store {
         hasMore: false,
         newMarkerBeforeId: null,
         sendError: null,
+        sendNotice: null,
         announcement: announcer.current,
       };
     }
@@ -252,6 +260,7 @@ export function createStore(options: StoreOptions = {}): Store {
       hasMore: repo?.hasMore ?? false,
       newMarkerBeforeId: current.marker,
       sendError: current.sendError,
+      sendNotice: current.sendNotice?.notice ?? null,
       announcement: announcer.current,
     };
   }
@@ -359,6 +368,7 @@ export function createStore(options: StoreOptions = {}): Store {
         if (id !== null && id !== CHANNEL && !repo.known.has(id)) {
           current.selectedConversation = CHANNEL;
           current.selection += 1;
+          keepNoticeFor(current, CHANNEL);
         }
         fixMarker(current);
       },
@@ -439,6 +449,7 @@ export function createStore(options: StoreOptions = {}): Store {
     current.selectedRepo = repo.key;
     current.selectedConversation = CHANNEL;
     current.sendError = null;
+    current.sendNotice = null;
     current.selection += 1;
     announcer.drop();
     ensureSync(current, repo);
@@ -448,6 +459,11 @@ export function createStore(options: StoreOptions = {}): Store {
       current.repos.delete(previous);
     }
     fixMarker(current);
+  }
+
+  /** The notice about a send belongs to the conversation its message went to: showing another one takes it away. */
+  function keepNoticeFor(current: Live, id: ConversationId | null): void {
+    if (current.sendNotice !== null && current.sendNotice.conversation !== id) current.sendNotice = null;
   }
 
   /** The first message of the selected conversation past the read pointer, fixed until the next selection. */
@@ -581,8 +597,10 @@ export function createStore(options: StoreOptions = {}): Store {
     const repo = current ? selectedSync(current) : null;
     if (disposed || !current || current.revoked || !repo) return false;
     const selection = current.selection;
-    if (current.sendError !== null) {
+    // A new send replaces whatever the last one left: its refusal, and the notice about it.
+    if (current.sendError !== null || current.sendNotice !== null) {
       current.sendError = null;
+      current.sendNotice = null;
       publish();
     }
     const baseline = repo.messages.at(-1)?.id ?? 0;
@@ -605,6 +623,18 @@ export function createStore(options: StoreOptions = {}): Store {
       return false;
     }
     if (live !== current || disposed || current.revoked) return true;
+    // What the bridge reported about the send goes up at once, not after the message has come back through
+    // the stream, and only where it was sent from, as a refusal does: a notice in another conversation
+    // would be about a message that is not there.
+    if (current.selection === selection) {
+      const notice = makeNotice(draft, result, noticeSeq + 1);
+      if (notice) {
+        noticeSeq += 1;
+        current.sendNotice = { notice, conversation: draft.to === CHANNEL ? CHANNEL : dmId(current.me.handle, draft.to) };
+        announcer.say(announcementOf(notice));
+        publish();
+      }
+    }
     // The answer's id may be null (the bridge could not find its own row), so it is a hint, not a promise.
     const id = result.id;
     const me = current.me.handle;
@@ -727,12 +757,21 @@ export function createStore(options: StoreOptions = {}): Store {
       if (id !== CHANNEL && !(selectedSync(current)?.known.has(id) ?? false)) return;
       current.selectedConversation = id;
       current.sendError = null;
+      // The composer opens the DM that a first message to someone created: that notice is about it, and stays.
+      keepNoticeFor(current, id);
       current.selection += 1;
       fixMarker(current);
       publish();
     },
 
     send,
+
+    dismissSendNotice() {
+      const current = live;
+      if (disposed || !current || current.sendNotice === null) return;
+      current.sendNotice = null;
+      publish();
+    },
 
     loadOlder() {
       const current = live;

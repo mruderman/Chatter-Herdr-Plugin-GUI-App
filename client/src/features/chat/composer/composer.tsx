@@ -1,8 +1,11 @@
 // The Chat view's composer (ui-contract sections 3 and 8): the "To" select, the message box with its
-// @-suggestions, Send, and the "Send error" alert. It reads the snapshot and calls the store's actions.
-// It decides nothing the bridge decides (who may use @everyone or address an agent, whether a message
-// is empty or too long): every draft goes to the store, and a refusal comes back as `sendError`, in the
-// bridge's own words, with the draft still in the box.
+// @-suggestions, Send, the "Send error" alert, and the "Send notice" status. It reads the snapshot and calls
+// the store's actions. It decides nothing the bridge decides (who may use @everyone or address an agent,
+// whether a message is empty or too long): every draft goes to the store, and a refusal comes back as
+// `sendError`, in the bridge's own words, with the draft still in the box. A send the bridge accepted can
+// still carry something the sender should know (a mention that reaches nobody, a message that no live
+// session took): the store hands it over as `sendNotice`, shown here as plain text until the member sends
+// again, opens another conversation, or dismisses it. It never takes focus when it appears.
 import type { TargetedInputEvent, TargetedKeyboardEvent, TargetedSubmitEvent } from 'preact';
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
 import { CHANNEL, type Store, type StoreSnapshot } from '../../../state/types';
@@ -25,6 +28,8 @@ export const COMPOSER_TEXT = {
   suggestions: 'Mention suggestions',
   sendError: 'Send error',
   sendErrorPrefix: 'Not sent: ',
+  sendNotice: 'Send notice',
+  dismissNotice: 'Dismiss notice',
   hint: 'Enter sends. Shift+Enter starts a new line. Type @ to mention someone.',
 } as const;
 
@@ -60,6 +65,21 @@ function suggestionAt(field: HTMLTextAreaElement, dismissed: boolean): Suggestin
   return context ? { context, active: 0 } : null;
 }
 
+/**
+ * Scrolls the page just far enough to bring the end of `notice` into the window, at once (never an
+ * animation), and never so far that `box`, which has focus, would leave it at the top: where the composer is
+ * taller than the window (a phone, 200% text) part of the notice stays below and the box stays in view.
+ * The room kept under the notice is its `scroll-margin-block-end`. Does nothing when it is already in view.
+ */
+function revealNotice(notice: HTMLElement, box: HTMLElement | null): void {
+  const room = document.documentElement.clientHeight;
+  const margin = Number.parseFloat(getComputedStyle(notice).scrollMarginBlockEnd) || 0;
+  const hidden = notice.getBoundingClientRect().bottom + margin - room;
+  if (hidden <= 0) return;
+  const spare = box ? Math.max(0, box.getBoundingClientRect().top) : hidden;
+  window.scrollBy({ top: Math.min(hidden, spare), behavior: 'instant' });
+}
+
 /** What stays in the box after a send succeeded: nothing, unless the member went on typing while it was in flight. */
 function remainderAfterSend(current: string, sent: string): string {
   if (current === sent) return '';
@@ -68,6 +88,7 @@ function remainderAfterSend(current: string, sent: string): string {
 
 export function Composer({ snapshot, store }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const noticeRef = useRef<HTMLDivElement>(null);
   const toId = useId();
   const listId = useId();
   const hintId = useId();
@@ -104,6 +125,7 @@ export function Composer({ snapshot, store }: ComposerProps) {
   // Hidden while a send is in flight, so every failure inserts a fresh alert and is announced again,
   // even when it repeats the last one word for word.
   const sendError = pending ? null : snapshot.sendError;
+  const notice = snapshot.sendNotice;
   const describedBy = [hintId, tooLong ? countId : null, sendError ? alertId : null].filter(Boolean).join(' ');
 
   function setDraft(text: string): void {
@@ -138,6 +160,14 @@ export function Composer({ snapshot, store }: ComposerProps) {
     awaitingDmRef.current = null;
     store.selectConversation(dm.id);
   }, [snapshot.conversations, store]);
+
+  // The composer is the last thing on the page and the notice sits under Send, so on a window of ordinary
+  // height it can start below the fold, where nobody would see it. See revealNotice; focus stays where it is.
+  const noticeSeq = notice?.seq ?? null;
+  useEffect(() => {
+    const shown = noticeRef.current;
+    if (noticeSeq !== null && shown) revealNotice(shown, textareaRef.current);
+  }, [noticeSeq]);
 
   const activeOption = list ? optionId(list.active) : null;
   useEffect(() => {
@@ -206,6 +236,13 @@ export function Composer({ snapshot, store }: ComposerProps) {
       setFailures((count) => count + 1);
     }
     setPending(false);
+  }
+
+  function dismissNotice(): void {
+    store.dismissSendNotice();
+    // The button that has focus is about to go: the message box is where the member goes on, and the
+    // alternative is focus dropping to the page.
+    textareaRef.current?.focus();
   }
 
   function chooseRecipient(value: string): void {
@@ -346,6 +383,24 @@ export function Composer({ snapshot, store }: ComposerProps) {
         <p key={failures} id={alertId} role="alert" aria-label={COMPOSER_TEXT.sendError} class="alert tone-danger">
           {`${COMPOSER_TEXT.sendErrorPrefix}${sendError.message}`}
         </p>
+      )}
+      {notice && (
+        // A status, not an alert: the message went. Plain text nodes only, whatever the lines hold. The button
+        // sits outside the status so that it is not read with it, and a new key for each notice makes a
+        // repeated one a new element.
+        <div key={notice.seq} ref={noticeRef} class="alert tone-warning composer__notice">
+          <div role="status" aria-label={COMPOSER_TEXT.sendNotice} class="composer__notice-text">
+            <p class="composer__notice-lead">{notice.lead}</p>
+            <ul class="composer__notice-lines">
+              {notice.lines.map((line, index) => (
+                <li key={index}>{line}</li>
+              ))}
+            </ul>
+          </div>
+          <button type="button" class="composer__notice-dismiss" onClick={dismissNotice}>
+            {COMPOSER_TEXT.dismissNotice}
+          </button>
+        </div>
       )}
     </form>
   );

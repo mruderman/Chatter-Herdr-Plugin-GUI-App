@@ -67,6 +67,21 @@ export interface Announcement {
   readonly seq: number;
 }
 
+/**
+ * What the bridge told the sender about a send it accepted (SPEC section 5: `warnings`, `delivery`, the " (queued)"
+ * suffix of `pushed`): shown beside the composer as a polite status and said once in the Announcements region.
+ * Plain text, produced by the store (send-notice.ts) so that the fake and the real one word it alike. Never an
+ * error: the message is stored and in the feed.
+ */
+export interface SendNotice {
+  /** Says that the message went, so the notice is not told from "Not sent: " by colour alone. */
+  readonly lead: string;
+  /** One line per warning, as the bridge gave it, then one per agent the message was saved for but not delivered to. */
+  readonly lines: readonly string[];
+  /** Grows with each notice, so one of the same text is a new element and is read again. */
+  readonly seq: number;
+}
+
 /** A message from someone else that arrived through the stream, for desktop notifications. */
 export interface IncomingMessage {
   readonly repo: string;
@@ -101,6 +116,12 @@ export interface StoreSnapshot {
   readonly newMarkerBeforeId: number | null;
   /** Why the last send failed, shown as "Not sent: " plus its message; null after a success, a new send, or another conversation or repo. */
   readonly sendError: ErrorInfo | null;
+  /**
+   * What the bridge told the sender about the last send it accepted, or null: after a send with nothing to
+   * report, once a new send starts, in another conversation than the one the message went to, in another
+   * repo, after dismissSendNotice(), and on sign-out. It stays otherwise: no timer takes it away (WCAG 2.2.1).
+   */
+  readonly sendNotice: SendNotice | null;
   /**
    * Throttled per UI contract section 3, at most once per 3 seconds; never about the member's own
    * messages. Null until the first one. One message reads "{sender}: {first 140 characters}". A
@@ -138,10 +159,13 @@ export interface Store {
   selectConversation(id: ConversationId): void;
   /**
    * Sends to the selected repo. True once the bridge accepted it: the message then shows in its
-   * conversation, which appears if it is a new DM. False when it was refused or the bridge could
-   * not be reached, with `sendError` set; also false, with no request, when nothing is selected.
+   * conversation, which appears if it is a new DM, and `sendNotice` says what the bridge reported about
+   * it, if anything. False when it was refused or the bridge could not be reached, with `sendError` set;
+   * also false, with no request, when nothing is selected.
    */
   send(draft: SendDraft): Promise<boolean>;
+  /** The member closes the send notice. Does nothing when there is none. */
+  dismissSendNotice(): void;
   /** Loads the next older page of the selected repo. Does nothing when `hasMore` is false; overlapping calls share one request. */
   loadOlder(): Promise<void>;
   /** Moves the selected repo's read pointer forward to the newest message of the selected conversation. Never backward. */

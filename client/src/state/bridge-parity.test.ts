@@ -12,10 +12,14 @@
 //            store has none to show, because the store contract carries only the code and the words.
 //   words    the refusal's message, which is what the member reads.
 //   stored   when it is accepted, the row as stored (to, kind, body, mentions, everyone) and, from the
-//            scripted bridge, who was mentioned and how a DM to an agent was delivered.
-// Not compared, because nothing here can produce it: the pushes and warnings that come from live Herdr
-// agents; rate limits; a name that is an agent in another repo only (the world has one repo; it would be
-// refused like the departed `rowan`, and for the same reason the fake cannot follow it).
+//            scripted bridge, the rest of the answer: who was mentioned, how a DM to an agent was
+//            delivered, which agents a post pushed to (" (queued)" when no pane was live: the world has no
+//            Herdr, so every push is) and the warnings Chatter wrote. The fake store has no answer to show;
+//            what it does with them is the send notice (sendNotice), which is compared too.
+// Not compared, because nothing here can produce it: pushes that a live Herdr pane takes, and the warning
+// that @everyone is reserved for the human (the world's admin is one); rate limits; a name that is an agent
+// in another repo only (the world has one repo; it would be refused like the departed `rowan`, and for the
+// same reason the fake cannot follow it).
 // The bridge decides what a name is the start of from the repo's live roster; the fake has only the
 // directory, which lists every agent of every repo, departed ones too. Where the two differ the fake
 // cannot follow, and UNMODELLED names those cases.
@@ -24,10 +28,11 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ApiError } from '../api/errors';
-import { parseDirectory, parseMe } from '../api/guards';
-import { CHANNEL, type Directory, type Me, type Message } from '../api/types';
+import { parseDirectory, parseMe, parseSendResult } from '../api/guards';
+import { CHANNEL, type Directory, type Me, type Message, type SendResult } from '../api/types';
 import { createFakeStore, type FakeMember } from './fake';
 import { FakeBridge, MAIN_REPO } from './fake-api';
+import { noticeLines, queuedText } from './send-notice';
 
 const CHATTER_JS = process.env.CHATTER_JS ?? '';
 const HAVE_CHATTER = CHATTER_JS !== '' && existsSync(CHATTER_JS);
@@ -122,6 +127,15 @@ const CASES: readonly Case[] = [
   post('a mention of a member', 'hi @ana'),
   post('a capitalised mention before a lower-case one', 'hi @Mira and @ana'),
   post('a mention nobody holds', 'hi @zzz'),
+  // The reproduction of the exploratory pass's finding 10: an agent's name mistyped.
+  post('a mention of nobody, @nobodyhere', 'is anybody there? @nobodyhere'),
+  post('a mistyped agent name, @codexx', 'hi @codexx'),
+  post('the same unknown mention twice', '@zzz and again @zzz'),
+  post('an unknown mention ended by a capital letter', 'hi @zzZ'),
+  post('an e-mail address', 'mail a@b.c'),
+  post('an agent and an unknown name', '@codex and @nobodyhere'),
+  // Only the departed agent `fl` (in the directory, not on the roster) and flan's own handle start with "f".
+  post('a mention that starts only the human\'s name, @f', 'hi @f'),
   post('a mention of @wren', 'hi @wren'),
   dm('a DM to cod, who is no member', 'cod'),
   dm('a DM to thom, the start of thomas-worker', 'thom'),
@@ -149,6 +163,7 @@ const NOT_ON_THE_ROSTER = 'the directory offers a name that is not on this repo\
  * gap is a decision written down and not an accident. Keys are "<case name> as <sender role>".
  */
 const UNMODELLED: Readonly<Record<string, string>> = {
+  'a mention that starts only the human\'s name, @f as restricted': 'the directory lists the departed agent `fl`, which the fake takes for an agent that "@f" starts and so refuses a restricted sender with agents_not_allowed; the roster has no live agent starting with "f", so the bridge accepts it and warns that the mention matches no agent',
   'a mention of @wren as restricted': DEPARTED_AGENT,
   'a DM to wren as restricted': DEPARTED_AGENT,
   'a DM to wren as permitted': DEPARTED_AGENT,
@@ -159,6 +174,22 @@ const UNMODELLED: Readonly<Record<string, string>> = {
   'a DM to a departed agent whose name is the start of the sender\'s own handle as restricted': OWN_HANDLE_NOT_LIVE,
   'a DM to a departed agent whose name is the start of the sender\'s own handle as permitted': OWN_HANDLE_NOT_LIVE,
   'a DM to a departed agent whose name is the start of the sender\'s own handle as admin': OWN_HANDLE_NOT_LIVE,
+};
+
+/**
+ * The cases whose pushes, warnings or notice the fakes cannot give as the bridge does, each with the reason;
+ * exact, like UNMODELLED: a case that differs and is not here fails, and so does one here that does not
+ * differ. Keys are "<case name> as <sender role>".
+ */
+const DEPARTED_MENTION = 'Chatter resolves a mention through the repo\'s roster, which leaves out departed agents; the fake has the directory, which lists them, so it takes a departed agent for the one the mention names or starts, and its push (and the notice made of it) names the departed agent where the bridge pushes to the live one, or to nobody';
+const HUMAN_NAME_MENTION = 'the directory lists the departed agent `fl`, which the fake takes for the agent "@f" starts (it refuses a restricted sender, and pushes to `fl (queued)` for the others), while the roster has no agent starting with "f": the bridge warns a member that the mention matches no agent, and says nothing to the admin, for whom Chatter resolves it to their own name (the human\'s name it counts among the candidates, which the fake does not know)';
+const UNMODELLED_NOTICE: Readonly<Record<string, string>> = {
+  'a mention that starts only the human\'s name, @f as permitted': HUMAN_NAME_MENTION,
+  'a mention that starts only the human\'s name, @f as admin': HUMAN_NAME_MENTION,
+  'a mention of @wren as permitted': DEPARTED_MENTION,
+  'a mention of @wren as admin': DEPARTED_MENTION,
+  '@rowan, a departed agent that is the start of a live one as permitted': DEPARTED_MENTION,
+  '@rowan, a departed agent that is the start of a live one as admin': DEPARTED_MENTION,
 };
 
 interface Stored {
@@ -174,8 +205,18 @@ interface Observed {
   readonly status: number | null;
   readonly refusal: { readonly code: string; readonly message: string } | null;
   readonly stored: Stored | null;
-  /** Who the answer says was mentioned, and the delivery; null for the fake store, whose send has no answer. */
-  readonly answer: { readonly mentioned: readonly string[]; readonly delivery: string | null } | null;
+  /**
+   * What the answer says besides the id: who was mentioned, the delivery, the agents pushed to and the
+   * warnings; null for the fake store, whose send has no answer.
+   */
+  readonly answer: {
+    readonly mentioned: readonly string[];
+    readonly delivery: string | null;
+    readonly pushed: readonly string[];
+    readonly warnings: readonly string[];
+  } | null;
+  /** What the sender is told about the accepted send (the send notice's lines); null when it was refused. */
+  readonly notice: readonly string[] | null;
 }
 
 interface Row {
@@ -193,7 +234,13 @@ const toWhom = (sender: Sender, to: Case['to']): string => {
 
 const storedOf = (row: Message): Stored => ({ to: row.to, kind: row.kind, body: row.body, mentions: row.mentions, everyone: row.everyone });
 
-const refusedWith = (status: number | null, code: string, message: string): Observed => ({ status, refusal: { code, message }, stored: null, answer: null });
+const refusedWith = (status: number | null, code: string, message: string): Observed => ({ status, refusal: { code, message }, stored: null, answer: null, notice: null });
+
+/** The part of an accepted send's answer the comparison reads, and the notice the client makes of it. */
+const answerOf = (to: string, text: string, sent: SendResult): Pick<Observed, 'answer' | 'notice'> => ({
+  answer: { mentioned: sent.mentioned_members, delivery: sent.delivery, pushed: sent.pushed, warnings: sent.warnings },
+  notice: noticeLines({ to, body: text }, sent),
+});
 
 /** The real bridge: a send over HTTP, then the stored row read back through the member's own view. */
 async function askReal(env: Env, sender: Sender, to: string, text: string): Promise<Observed> {
@@ -202,11 +249,12 @@ async function askReal(env: Env, sender: Sender, to: string, text: string): Prom
     const { error } = reply.body as { error?: { code?: string; message?: string } };
     return refusedWith(reply.status, error?.code ?? '', error?.message ?? '');
   }
-  const sent = reply.body as { id: number | null; mentioned_members: string[]; delivery: string | null };
+  // Through the client's own guard, as the store reads it.
+  const sent = parseSendResult(reply.body);
   const page = await env.messages(sender.handle, '?limit=500');
   const row = (page.body as { messages: Message[] }).messages.find((candidate) => candidate.id === sent.id);
   if (!row) throw new Error(`the real bridge accepted "${text}" as ${sender.handle} but gave no row to read back (id ${String(sent.id)})`);
-  return { status: reply.status, refusal: null, stored: storedOf(row), answer: { mentioned: sent.mentioned_members, delivery: sent.delivery } };
+  return { status: reply.status, refusal: null, stored: storedOf(row), ...answerOf(to, text, sent) };
 }
 
 /** The scripted bridge, fresh for each row, serving the real directory. */
@@ -217,7 +265,7 @@ async function askScriptedBridge(directory: Directory, sender: Sender, to: strin
     const sent = await bridge.api(() => bridge.tokenOf(sender.handle)).send(MAIN_REPO, { to, body: text });
     const row = bridge.rows(MAIN_REPO).find((candidate) => candidate.id === sent.id);
     if (!row) throw new Error(`the scripted bridge accepted "${text}" as ${sender.handle} but stored no row`);
-    return { status: CREATED, refusal: null, stored: storedOf(row), answer: { mentioned: sent.mentioned_members, delivery: sent.delivery } };
+    return { status: CREATED, refusal: null, stored: storedOf(row), ...answerOf(to, text, sent) };
   } catch (error) {
     if (error instanceof ApiError) return refusedWith(error.status, error.code, error.message);
     throw error;
@@ -230,7 +278,7 @@ async function askFakeStore(directory: Directory, sender: Sender, to: string, te
   store.setDirectory(directory);
   await store.refreshDirectory();
   const accepted = await store.send({ to, body: text });
-  const { sendError, conversations } = store.getSnapshot();
+  const { sendError, conversations, sendNotice } = store.getSnapshot();
   if (!accepted) {
     if (!sendError) throw new Error(`the fake store refused "${text}" as ${sender.handle} without saying why`);
     return refusedWith(null, sendError.code, sendError.message);
@@ -240,10 +288,10 @@ async function askFakeStore(directory: Directory, sender: Sender, to: string, te
   store.selectConversation(conversation.id);
   const row = store.getSnapshot().messages.at(-1);
   if (!row) throw new Error(`the fake store accepted "${text}" as ${sender.handle} but shows no message`);
-  return { status: null, refusal: null, stored: storedOf(row), answer: null };
+  return { status: null, refusal: null, stored: storedOf(row), answer: null, notice: sendNotice?.lines ?? [] };
 }
 
-type Aspect = 'outcome' | 'words' | 'stored';
+type Aspect = 'outcome' | 'words' | 'stored' | 'notice';
 
 /** How a fake's answer differs from the real bridge's, by what differs. */
 function against(real: Observed, fake: Observed): Aspect[] {
@@ -253,8 +301,12 @@ function against(real: Observed, fake: Observed): Aspect[] {
   if (realCode !== fakeCode || (fake.status !== null && fake.status !== real.status)) found.push('outcome');
   else if (real.refusal && fake.refusal && real.refusal.message !== fake.refusal.message) found.push('words');
   else if (real.stored && fake.stored) {
-    const answers = real.answer && fake.answer ? JSON.stringify(real.answer) !== JSON.stringify(fake.answer) : false;
-    if (JSON.stringify(real.stored) !== JSON.stringify(fake.stored) || answers) found.push('stored');
+    // Who was mentioned and how a DM was delivered belong to what is stored; the pushes and warnings, and the
+    // notice the sender is shown, to what the sender is told (the departed agents make the two come apart).
+    const same = (pick: (answer: NonNullable<Observed['answer']>) => unknown): boolean =>
+      real.answer === null || fake.answer === null || JSON.stringify(pick(real.answer)) === JSON.stringify(pick(fake.answer));
+    if (JSON.stringify(real.stored) !== JSON.stringify(fake.stored) || !same((a) => [a.mentioned, a.delivery])) found.push('stored');
+    if (JSON.stringify(real.notice) !== JSON.stringify(fake.notice) || !same((a) => [a.pushed, a.warnings])) found.push('notice');
   }
   return found;
 }
@@ -378,7 +430,69 @@ describe.skipIf(!HAVE_CHATTER)('the fakes against the real bridge and Chatter (n
   });
 
   it('has the fake store and the scripted bridge answer every message alike', () => {
-    const alike = (a: Observed, b: Observed): boolean => JSON.stringify([a.refusal, a.stored]) === JSON.stringify([b.refusal, b.stored]);
+    const alike = (a: Observed, b: Observed): boolean => JSON.stringify([a.refusal, a.stored, a.notice]) === JSON.stringify([b.refusal, b.stored, b.notice]);
     expect(rows.filter((row) => !alike(row.store, row.bridge)).map(describeRow)).toEqual([]);
+  });
+
+  const rowOf = (name: string, sender: Sender): Row => {
+    const row = rows.find((candidate) => candidate.key === `${name} as ${sender.role}`);
+    if (!row) throw new Error(`no row "${name} as ${sender.role}"`);
+    return row;
+  };
+
+  // Exploratory pass, finding 10: a mistyped agent name was a normal, successful send in the client.
+  it('has the real bridge warn that a mention reaches nobody, in the words Chatter writes, and both fakes say the same to the sender', () => {
+    const warning = 'mention @nobodyhere matches no agent in this repo — not pushed';
+    for (const sender of SENDERS) {
+      const row = rowOf('a mention of nobody, @nobodyhere', sender);
+      expect(row.real.status, sender.role).toBe(CREATED);
+      expect(row.real.answer?.warnings, sender.role).toEqual([warning]);
+      expect(row.bridge.answer?.warnings, sender.role).toEqual([warning]);
+      expect(row.store.notice, sender.role).toEqual([warning]);
+    }
+  });
+
+  it('has the real bridge warn once for each occurrence, read a mention as Chatter does (a capital letter ends it), and call an e-mail address a mention', () => {
+    for (const sender of SENDERS) {
+      expect(rowOf('the same unknown mention twice', sender).real.answer?.warnings, sender.role).toEqual([
+        'mention @zzz matches no agent in this repo — not pushed',
+        'mention @zzz matches no agent in this repo — not pushed',
+      ]);
+      expect(rowOf('an unknown mention ended by a capital letter', sender).real.answer?.warnings, sender.role).toEqual(['mention @zz matches no agent in this repo — not pushed']);
+      expect(rowOf('an e-mail address', sender).real.answer?.warnings, sender.role).toEqual(['mention @b matches no agent in this repo — not pushed']);
+    }
+  });
+
+  it('has the real bridge say nothing for a mention of a member, who is no agent but is not nobody', () => {
+    for (const sender of SENDERS) expect(rowOf('a mention of a member', sender).real.answer?.warnings, sender.role).toEqual([]);
+  });
+
+  it('has the real bridge queue a DM to a live agent, and a mention of one, when no pane is live (the world has no Herdr), and both fakes say so', () => {
+    for (const sender of SENDERS.filter((one) => one.role !== 'restricted')) {
+      const direct = rowOf('a DM to codex-worker, the exact name', sender);
+      expect(direct.real.answer?.delivery, sender.role).toBe('queued');
+      expect(direct.real.notice, sender.role).toEqual([queuedText('codex-worker')]);
+      expect(direct.bridge.notice, sender.role).toEqual(direct.real.notice);
+      expect(direct.store.notice, sender.role).toEqual(direct.real.notice);
+
+      const mention = rowOf('@codex, the start of codex-worker', sender);
+      expect(mention.real.answer?.pushed, sender.role).toEqual(['codex-worker (queued)']);
+      expect(mention.real.notice, sender.role).toEqual([queuedText('codex-worker')]);
+      expect(mention.bridge.answer?.pushed, sender.role).toEqual(['codex-worker (queued)']);
+      expect(mention.store.notice, sender.role).toEqual(mention.real.notice);
+    }
+  });
+
+  it('gives the real bridge\'s pushes, warnings and delivery from the scripted bridge, and its notice from the fake store, except for the cases named as unmodelled', () => {
+    const differing = rows.filter((row) => disagreements(row).includes('stored') || disagreements(row).includes('notice'));
+    const listed = Object.keys(UNMODELLED_NOTICE);
+    expect({
+      unlisted: differing.filter((row) => !listed.includes(row.key)).map(describeRow),
+      listedButAgreeing: listed.filter((key) => !differing.some((row) => row.key === key)),
+    }).toEqual({ unlisted: [], listedButAgreeing: [] });
+  });
+
+  it('gives a reason for each case unmodelled in the notice', () => {
+    for (const [key, why] of Object.entries(UNMODELLED_NOTICE)) expect(why.length, key).toBeGreaterThan(20);
   });
 });
