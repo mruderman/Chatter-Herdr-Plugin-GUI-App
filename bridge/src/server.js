@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { credentialOf, makeAuthenticator, revokedCredentials } from './auth.js';
-import { canSee, boardTables, findWritten, maxMessageId, queryMessages, rowsAfter, shape } from './messages.js';
+import { canSee, boardTables, findWritten, listConversations, maxMessageId, queryMessages, rowsAfter, shape } from './messages.js';
 import { DEFAULT_LIMITS, RateLimiter, checkWrite } from './policy.js';
 import { apiArea, createStatic } from './static.js';
 import { HttpError } from './util.js';
@@ -207,6 +207,11 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
       limit: q.get('limit') ?? 100,
     });
     return { repo: repo.key, epoch: host.epoch(repo), ...page };
+  }
+
+  async function getConversations(actor, key) {
+    const repo = await host.repo(key);
+    return { repo: repo.key, conversations: listConversations(host.openRO(repo), actor.now()) };
   }
 
   async function postMessage(actor, key, body) {
@@ -430,6 +435,7 @@ export function createBridge({ store, host, trustTailscale = false, whois, limit
         if (method === 'GET') return send(res, 200, await getMessages(actor, key, url.searchParams));
         if (method === 'POST') return send(res, 201, await postMessage(actor, key, await readJson(req)));
       }
+      if (seg[3] === 'conversations' && method === 'GET' && seg.length === 4) return send(res, 200, await getConversations(actor, key));
       if (seg[3] === 'stream' && method === 'GET' && seg.length === 4) return openStream(actor, key, req, res, url.searchParams);
       if (seg[3] === 'board' && method === 'GET' && seg.length === 4) return send(res, 200, await getBoard(actor, key));
       if (seg[3] === 'read' && method === 'POST' && seg.length === 4) {

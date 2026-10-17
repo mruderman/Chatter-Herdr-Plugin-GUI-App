@@ -66,6 +66,24 @@ export function queryMessages(db, member, { afterId = null, beforeId = null, lim
   return { messages: rows.map(shape), has_more: hasMore, max_id: maxId };
 }
 
+/**
+ * The direct-message pairs visible to `member`, newest first: for each unordered pair of participants, the
+ * id and time of its newest visible message. The same visibility as `queryMessages`, so a member learns
+ * nothing they could not find by paging back (V5 finding 9: a DM older than the newest page has no entry
+ * in a list built from loaded messages). No text: only who and when.
+ */
+export function listConversations(db, member) {
+  const v = visibility(member);
+  // Scalar min() and max() over the two columns name the pair whichever way it was written.
+  const rows = db.prepare(
+    `SELECT c.a, c.b, c.last_id, m.created_at FROM (
+       SELECT min(from_agent, to_agent) AS a, max(from_agent, to_agent) AS b, max(id) AS last_id
+       FROM messages WHERE to_agent != ? AND ${v.sql} GROUP BY a, b
+     ) AS c JOIN messages AS m ON m.id = c.last_id ORDER BY c.last_id DESC`,
+  ).all(CHANNEL, ...v.params);
+  return rows.map((r) => ({ a: r.a, b: r.b, last_id: r.last_id, last_at: chatterTime(r.created_at) }));
+}
+
 export function maxMessageId(db) {
   return db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM messages').get().m;
 }
