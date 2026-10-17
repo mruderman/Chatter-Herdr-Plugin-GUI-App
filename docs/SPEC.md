@@ -20,7 +20,7 @@ Proposed targets (not agreed): a new message reaches every connected client with
 
 | ID | Decision | Choice | Status |
 | --- | --- | --- | --- |
-| Q1 | Who connects | The admin, other humans, computational members outside Herdr (Thom, Kieran, Ezra on Letta Code; Grace on Prime Agent) | Decided |
+| Q1 | Who connects | The admin, other humans, computational members (Thom, Kieran, Ezra on Letta Code; Grace on Prime Agent, who runs in Herdr on production, Flan 2026-10-16) | Decided |
 | D4 | Outside members may @mention or DM Herdr agents (text goes into agent terminals) | On for every registered member; admin can switch it off per member. Kept safeguards: admin-only registration, revocation, audit log, Chatter's own sanitizing | Decided |
 | D1 | Export scope | `#chat` only by default; a toggle adds the DMs the exporting member can see | Default |
 | D2 | v1 scope | Chat, DMs, board, export, `/brief`, `/role`. `/spawn`, `/team` in v1.1 | Default |
@@ -36,6 +36,7 @@ Proposed targets (not agreed): a new message reaches every connected client with
 | D18 | Search | Client-side over the IndexedDB archive; no bridge route (a member can only search what they could see, it works offline, and no regular expression runs on the bridge host). Modes: keyword with "Match case", regular expression, fuzzy later. One pure matcher used by the UI and the tests, scanned in a Web Worker with cancel and a time limit. Highlights are text segments and `<mark>`, never HTML | Decided (Flan, 2026-10-13), part of M4 |
 | D19 | Archive scope | `#chat` only by default; the DMs the member can see are kept only if they opt in, as for the export (D1) | Decided (Flan, 2026-10-13), part of M4 |
 | D21 | Shared account on production | The bridge runs as `letta`, the same account as the agents' panes, because it must write Chatter's state through the `chatter` CLI and reach Herdr's socket. The bridge's policy (DM privacy, `@everyone`, agent addressing, revocation) governs the HTTP path only: any process running as `letta`, such as an agent with a shell tool, can read every Chatter database and edit the bridge's registry. **Accepted for the MVP**; the bridge is not offered as protection against an agent that has a shell on that host. Not decided, for after the MVP: a separate account for the bridge, with the permissions it would need on Chatter's state and Herdr's socket (section 10) | Decided (Flan, 2026-10-14) |
+| D22 | Test isolation | Nothing is tested on `baremetalcyansociety` or on any agent that lives there (Grace, who runs in Herdr there, and the others): no messages, no pane contact, no Herdr or Letta commands, beyond the read-only SSH of D11. Letta tests use the Letta Code CLI's own local backend (`--backend local`) in a dedicated home directory (`~/.chatter-gui-test/letta-home`), never the Letta Desktop client (its "local" backend is production's Letta; Desktop is being deprecated) and never `~/.letta` or `~/.config/Letta`. The agents under test are test agents on this laptop, in throwaway directories, against a throwaway bridge | Decided (Flan, 2026-10-16) |
 
 Range export is inclusive at both ends. "Between 200 and 100 messages ago" is positions 100 to 200 (101 messages). Confirmed by Flan.
 
