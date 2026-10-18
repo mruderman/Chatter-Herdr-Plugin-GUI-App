@@ -41,6 +41,11 @@ const ANNOUNCEMENT = {
 const OWN_ACCOUNT = {
   revoke: 'This is your own account, so your access ends at once.',
   rotate: 'This is your own account, so your current token stops working at once.',
+  // The store takes the new token over when the answer arrives (wiring/admin-screen.tsx, followRotation), and a
+  // session through the tailnet identity never had a token to lose, so this holds for both. It also reconciles
+  // the sentence above it, which says that every session on the old token ends. A paragraph of its own, so that
+  // the sentence the specs look for stays exactly as it was.
+  rotateStays: 'This session stays signed in; any other session that uses the old token ends.',
 } as const;
 
 // One dialog at a time. The token of a new or rotated member exists only inside the `token` entry,
@@ -273,7 +278,12 @@ export function AdminView({ api, refreshDirectory, selfHandle, timeZone }: Admin
           onCancel={closeDialog}
         >
           <p>{`The current token for ${dialog.member.handle} stops working at once, and any session that uses it ends. A new token is shown once.`}</p>
-          {isSelf(dialog.member) && <p>{OWN_ACCOUNT.rotate}</p>}
+          {isSelf(dialog.member) && (
+            <>
+              <p>{OWN_ACCOUNT.rotate}</p>
+              <p>{OWN_ACCOUNT.rotateStays}</p>
+            </>
+          )}
         </ConfirmDialog>
       )}
       {dialog?.kind === 'token' && <TokenDialog key={dialog.id} handle={dialog.handle} token={dialog.token} onClose={closeDialog} />}

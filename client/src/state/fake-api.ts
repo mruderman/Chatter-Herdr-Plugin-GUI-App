@@ -37,6 +37,7 @@ export const BRIDGE_ROUTES = {
   send: 'send',
   read: 'read',
   stream: 'stream',
+  rotate: 'rotate',
 } as const;
 export type BridgeRoute = (typeof BRIDGE_ROUTES)[keyof typeof BRIDGE_ROUTES];
 
@@ -205,7 +206,14 @@ export class FakeBridge {
       addMember: unscripted('addMember'),
       updateMember: unscripted('updateMember'),
       revokeMember: unscripted('revokeMember'),
-      rotateToken: unscripted('rotateToken'),
+      // POST /v1/members/{handle}/token: the admin check, then the rotation, whose byes go to the member's
+      // streams before this answers, as in bridge/src/server.js (closeStreamsFor, then send).
+      rotateToken: async (handle, options) => {
+        const member = await enter(BRIDGE_ROUTES.rotate, signalOf(options), { repo: null });
+        if (member.role !== ROLE_ADMIN) throw refusal('members-forbidden');
+        if (!recordedNames(handle)) throw new ApiError(404, ERROR_CODES.noSuchMember, `no member "${handle}"`);
+        return { token: this.rotate(handle) };
+      },
       audit: unscripted('audit'),
       me: async (options) => enter(BRIDGE_ROUTES.me, signalOf(options), { repo: null }),
       directory: async (options) => {
@@ -305,10 +313,13 @@ export class FakeBridge {
     for (const sub of [...this.subscribers]) if (sub.member.handle === handle) this.end(sub, BYE_REASONS.revoked);
   }
 
-  /** The admin rotates the member's token: its streams get `bye token_rotated` and the old token stops working. */
+  /**
+   * The admin rotates the member's token: every stream of the member, a tailnet-identity one too, gets
+   * `bye token_rotated` (closeStreamsFor does not look at the credential), and the old token stops working.
+   * A member who had no token gets one, as the bridge's issueToken gives one to any active member.
+   */
   rotate(handle: string): string {
-    const old = this.tokenOf(handle);
-    this.tokens.delete(old);
+    for (const [token, owner] of [...this.tokens]) if (owner === handle) this.tokens.delete(token);
     this.rotations += 1;
     const fresh = `${TOKEN_PREFIX}${handle}-rotated-${this.rotations}`;
     this.tokens.set(fresh, handle);

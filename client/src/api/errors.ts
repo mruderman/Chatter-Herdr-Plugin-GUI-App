@@ -51,6 +51,8 @@ export const CLIENT_ERROR_CODES = {
   unusableToken: 'unusable_token',
   network: 'network',
   protocol: 'protocol',
+  /** A send the store did not make because the bridge had revoked the signed-in member (state/store.ts). */
+  accessRevoked: 'access_revoked',
 } as const;
 
 /** The bridge refused the request; `code` and `message` are the bridge's own. */

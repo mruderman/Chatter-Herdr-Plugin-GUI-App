@@ -934,6 +934,9 @@ describe('Admin view: rotate token', () => {
     return screen.getByRole('dialog', { name: `Rotate token for ${handle}?` });
   };
   const OWN_ROTATE = 'This is your own account, so your current token stops working at once.';
+  // V5 finding 2: the session follows the new token, so the question says that it goes on. A paragraph of its
+  // own: OWN_ROTATE stays word for word what the specs and the contract look for.
+  const OWN_ROTATE_STAYS = 'This session stays signed in; any other session that uses the old token ends.';
 
   it('asks first, says that the old token stops working, and sends nothing until Rotate is chosen', async () => {
     const { user, bridge, refreshDirectory } = renderAdmin();
@@ -1007,9 +1010,12 @@ describe('Admin view: rotate token', () => {
     await openRotate(user, 'flan');
     expect(screen.getByText(OWN_ROTATE)).toBeTruthy();
     expect(screen.getByRole('dialog', { name: 'Rotate token for flan?' }).getAttribute('aria-describedby')).toBe(screen.getByText(OWN_ROTATE).parentElement?.id);
+    // The second sentence is in the description too, so a screen reader reads both with the question.
+    expect(screen.getByText(OWN_ROTATE_STAYS).parentElement).toBe(screen.getByText(OWN_ROTATE).parentElement);
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     await openRotate(user, 'mira');
     expect(screen.queryByText(OWN_ROTATE)).toBeNull();
+    expect(screen.queryByText(OWN_ROTATE_STAYS)).toBeNull();
   });
 
   it('says nothing about an own account when it is not told who is signed in', async () => {
@@ -1017,6 +1023,7 @@ describe('Admin view: rotate token', () => {
     await loaded();
     await openRotate(user, 'flan');
     expect(screen.queryByText(OWN_ROTATE)).toBeNull();
+    expect(screen.queryByText(OWN_ROTATE_STAYS)).toBeNull();
   });
 });
 

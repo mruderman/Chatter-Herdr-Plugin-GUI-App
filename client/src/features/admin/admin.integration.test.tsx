@@ -336,6 +336,8 @@ describe.skipIf(!HAVE_CHATTER)('the Admin view against the real bridge and Chatt
     const fresh = tokenShown('ada');
     expect((await env.api(fresh, 'GET', '/v1/me')).status).toBe(200);
     // The page still sends the token it was given, which the bridge now refuses: the reload says so in the bridge's words.
+    // This harness is the panel on its own, with an Api that holds one fixed token. In the app the store takes the new
+    // token over when the answer arrives (wiring/admin-screen.tsx, state/own-rotation.test.ts), and the reload succeeds.
     expect((await env.api('ada', 'GET', '/v1/me')).status).toBe(401);
     expect(await screen.findByText('Could not load the members: token is invalid or revoked')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Done' }));

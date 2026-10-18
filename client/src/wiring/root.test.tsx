@@ -83,7 +83,10 @@ const nav = () => within(screen.getByRole('navigation', { name: 'Primary' }));
 // A throwaway that opens nothing anywhere.
 const TOKEN = 'test-token-root';
 const BEARER = `Bearer ${TOKEN}`;
-const METHOD = { get: 'GET', delete: 'DELETE' } as const;
+const METHOD = { get: 'GET', delete: 'DELETE', post: 'POST' } as const;
+// The token the stub bridge issues when a token is rotated. A throwaway that opens nothing anywhere.
+const FRESH_TOKEN = 'test-token-root-rotated';
+const FRESH_BEARER = `Bearer ${FRESH_TOKEN}`;
 // The member the recorded revoke answers for.
 const REVOKED = 'temp';
 // The bridge's answer to a member who is not an admin, the same on every admin-only route.
@@ -110,12 +113,21 @@ const sentTo = (sent: readonly Sent[], ...paths: string[]): Sent[] => sent.filte
 function stubBridge(member: Me) {
   const sent: Sent[] = [];
   const admin = member.role === 'admin';
+  // The one credential the bridge accepts. A rotation of the member's own token replaces it, as the real one does.
+  let accepted = BEARER;
   const fetch = async (url: string, init: RequestInit): Promise<Response> => {
     const method = init.method ?? METHOD.get;
     const { pathname: path } = new URL(url, 'http://bridge.test');
     const authorization = new Headers(init.headers).get('authorization');
     sent.push({ method, path, url, authorization });
-    if (authorization !== BEARER) return replay('me-unauthenticated');
+    if (authorization !== accepted) return replay('me-unauthenticated');
+    if (method === METHOD.post && admin) {
+      const rotated = [member.handle, REVOKED].find((handle) => path === ROUTES.memberToken(handle));
+      if (rotated !== undefined) {
+        if (rotated === member.handle) accepted = FRESH_BEARER;
+        return Response.json({ token: FRESH_TOKEN }, { status: 201 });
+      }
+    }
     switch (`${method} ${path}`) {
       case `${METHOD.get} ${ROUTES.me}`:
         return Response.json(member);
@@ -267,6 +279,50 @@ describe('the registry\'s real views', () => {
     expect(sentTo(bridge.sent.slice(revoked + 1), ROUTES.directory)).toEqual([
       { method: METHOD.get, path: ROUTES.directory, url: ROUTES.directory, authorization: BEARER },
     ]);
+  });
+
+  // V5 finding 2. The stub bridge answers the rotation with a new token and refuses the old one from then on, as the
+  // real one does; the streams (which end with `bye token_rotated`) are the store's own tests (state/own-rotation.test.ts).
+  it('Admin: rotating one\'s own token shows the new one and goes on as the same session, asking for everything after it with the new token', async () => {
+    const { bridge, user } = await openAdminOverBridge();
+    await user.click(screen.getByRole('button', { name: `Rotate token for ${ADMIN_ME.handle}` }));
+    const question = within(screen.getByRole('dialog', { name: `Rotate token for ${ADMIN_ME.handle}?` }));
+    expect(question.getByText('This is your own account, so your current token stops working at once.')).toBeTruthy();
+    await user.click(question.getByRole('button', { name: 'Rotate' }));
+    await settle();
+
+    const dialog = within(screen.getByRole('dialog', { name: `New token for ${ADMIN_ME.handle}` }));
+    expect((dialog.getByLabelText('Token') as HTMLTextAreaElement).value).toBe(FRESH_TOKEN);
+    const rotation = bridge.sent.findIndex((request) => request.method === METHOD.post && request.path === ROUTES.memberToken(ADMIN_ME.handle));
+    expect(rotation).toBeGreaterThan(-1);
+    expect(bridge.sent[rotation]?.authorization).toBe(BEARER);
+    // What the panel and the store ask for once the answer is in: both lists and the directory, every one with the new token.
+    const after = bridge.sent.slice(rotation + 1);
+    expect(sentTo(after, ROUTES.members, ROUTES.audit, ROUTES.directory).map((request) => request.path).sort()).toEqual([ROUTES.audit, ROUTES.directory, ROUTES.members]);
+    expect(after.map((request) => request.authorization)).toEqual(after.map(() => FRESH_BEARER));
+    // Still the Admin view with its members, not the sign-in form, and no failure shown.
+    expect(heading()).toBe('Admin');
+    expect(screen.getByRole('table', { name: 'Members' })).toBeTruthy();
+    expect(screen.queryByText(/Could not load/)).toBeNull();
+
+    // After Done the token is nowhere in the page, and it was never in a URL.
+    await user.click(dialog.getByRole('button', { name: 'Done' }));
+    await settle();
+    expect(document.body.innerHTML.includes(FRESH_TOKEN)).toBe(false);
+    expect(bridge.sent.some((request) => request.url.includes(FRESH_TOKEN))).toBe(false);
+  });
+
+  it('Admin: rotating another member\'s token shows the new one and leaves the session on its own token', async () => {
+    const { bridge, user } = await openAdminOverBridge();
+    await user.click(screen.getByRole('button', { name: `Rotate token for ${REVOKED}` }));
+    await user.click(within(screen.getByRole('dialog', { name: `Rotate token for ${REVOKED}?` })).getByRole('button', { name: 'Rotate' }));
+    await settle();
+    expect(within(screen.getByRole('dialog', { name: `New token for ${REVOKED}` })).getByLabelText('Token')).toBeTruthy();
+    const rotation = bridge.sent.findIndex((request) => request.method === METHOD.post && request.path === ROUTES.memberToken(REVOKED));
+    expect(rotation).toBeGreaterThan(-1);
+    const after = bridge.sent.slice(rotation + 1);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.map((request) => request.authorization)).toEqual(after.map(() => BEARER));
   });
 
   it('Admin: the panel is told the signed-in member\'s handle, so revoking one\'s own account says so', async () => {

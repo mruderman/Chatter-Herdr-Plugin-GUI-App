@@ -5,6 +5,7 @@
 // A difference between the two is a bug in one of them.
 import { describe, expect, it } from 'vitest';
 import { body, recordedError } from '../../test/fixtures/recorded';
+import type { Api } from '../api/client';
 import { ManualClock } from '../api/clock';
 import { parseDirectory, parseMessagesPage, parseRepos } from '../api/guards';
 import { CHANNEL, type Directory, type Message } from '../api/types';
@@ -13,6 +14,9 @@ import { FakeBridge, MAIN_REPO, SITE_REPO } from './fake-api';
 import { NOTICE_LEAD, queuedText } from './send-notice';
 import { createStore } from './store';
 import type { IncomingMessage, Store, StoreSnapshot } from './types';
+
+// Not a bridge token: the fake store never holds one.
+const FAKE_ROTATED_TOKEN = 'fake-rotated-token';
 
 type StartAs = 'signed-in' | 'signed-out' | 'unknown' | 'not-registered';
 
@@ -49,6 +53,10 @@ interface Driver {
   /** Drafts the bridge accepted and stored. */
   written(): number;
   scheduled(): number;
+  /** The bridge revokes the signed-in member, as an admin does from the panel or the CLI. */
+  revoke(): Promise<void>;
+  /** The admin panel rotates `handle`'s token through the store, as the app wires it; the token the answer carried. */
+  rotate(handle: string): Promise<string>;
 }
 
 type MakeDriver = (options?: DriverOptions) => Promise<Driver>;
@@ -85,6 +93,9 @@ const fakeDriver: MakeDriver = async (options = {}) => {
     readPointer: (repo) => store.readPointer(repo),
     written: () => store.sent.length,
     scheduled: () => clock.scheduled,
+    revoke: async () => store.setConnection('revoked'),
+    // The fake holds no token, so its answer is any string; what is checked is that the session goes on.
+    rotate: async (handle) => (await store.followRotation(handle, async () => ({ token: FAKE_ROTATED_TOKEN }))).token,
   });
 };
 
@@ -98,7 +109,18 @@ const realDriver: MakeDriver = async (options = {}) => {
   const identity = session === 'signed-in' ? as : session === 'not-registered' ? 'not-registered' : null;
   const bridge = new FakeBridge({ clock, identity, lastReadId: options.lastReadId });
   if (session === 'unknown') bridge.cut();
-  const store = createStore({ api: bridge.api, clock, random: () => 0.5, streamTiming: QUIET, pageSize: options.pageSize });
+  // The Api the panel calls the bridge with: the store's own getter of its token, as services.ts hands it on.
+  let panel: Api | null = null;
+  const store = createStore({
+    api: (getToken) => {
+      panel = bridge.api(getToken);
+      return panel;
+    },
+    clock,
+    random: () => 0.5,
+    streamTiming: QUIET,
+    pageSize: options.pageSize,
+  });
   await settle();
   const rowsAtStart = bridge.rows(MAIN_REPO).length + bridge.rows(SITE_REPO).length;
   let received = 0;
@@ -119,6 +141,17 @@ const realDriver: MakeDriver = async (options = {}) => {
     readPointer: (repo) => bridge.readPointer(as, repo),
     written: () => bridge.rows(MAIN_REPO).length + bridge.rows(SITE_REPO).length - rowsAtStart - received,
     scheduled: () => clock.scheduled,
+    revoke: async () => {
+      bridge.revoke(as);
+      await settle();
+    },
+    rotate: async (handle) => {
+      const api = panel;
+      if (!api) throw new Error('the store built no Api');
+      const answered = await store.followRotation(handle, () => api.rotateToken(handle));
+      await settle();
+      return answered.token;
+    },
   });
 };
 
@@ -827,6 +860,49 @@ describe.each([
       expect(d.now().announcement).toBeNull();
       expect(d.incoming).toEqual([{ repo: SITE_REPO, message }]);
       expect(d.now().messages.map((m) => m.body)).not.toContain('over in site');
+    });
+  });
+
+  // V5 finding 3: the Connection says "Access revoked"; a send then used to go nowhere without a word.
+  describe('a session the bridge revoked', () => {
+    it('tells the member that nothing was sent when they press Send, makes no write, and keeps everything readable', async () => {
+      const d = await make();
+      const loaded = d.now().messages;
+      const written = d.written();
+      await d.revoke();
+      expect(d.now().connection).toBe('revoked');
+      expect(await d.store.send({ to: CHANNEL, body: 'is anybody there?' })).toBe(false);
+      expect(d.now().sendError).toEqual({ code: 'access_revoked', message: 'Access revoked, so nothing was sent.' });
+      expect(d.written()).toBe(written);
+      expect(d.now()).toMatchObject({ session: { status: 'signed-in' }, connection: 'revoked' });
+      expect(d.now().messages).toEqual(loaded);
+    });
+  });
+
+  // V5 finding 2: an admin who rotates their own token must stay signed in, on the new one.
+  describe('the admin panel rotating a token through the store', () => {
+    it('goes on as the same session when it is the member\'s own token: nothing is reloaded or lost', async () => {
+      const d = await make({ session: 'signed-out', as: 'flan' });
+      expect(await d.store.signIn(d.token)).toBe(true);
+      await d.settle();
+      const before = d.now();
+      const fresh = await d.rotate('flan');
+      await d.settle();
+      expect(typeof fresh).toBe('string');
+      expect(d.now()).toMatchObject({ session: before.session, connection: 'online', selectedRepo: before.selectedRepo, selectedConversation: before.selectedConversation });
+      expect(d.now().messages).toEqual(before.messages);
+      expect(d.now().conversations).toEqual(before.conversations);
+      expect(d.snapshots.some((snapshot) => snapshot.session.status !== 'signed-in')).toBe(false);
+    });
+
+    it('passes the answer back and changes nothing when it is another member\'s token', async () => {
+      const d = await make({ session: 'signed-out', as: 'flan' });
+      expect(await d.store.signIn(d.token)).toBe(true);
+      await d.settle();
+      const before = d.now();
+      expect(typeof (await d.rotate('mira'))).toBe('string');
+      await d.settle();
+      expect(d.now()).toBe(before);
     });
   });
 

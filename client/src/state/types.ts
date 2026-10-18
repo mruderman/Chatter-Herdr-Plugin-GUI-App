@@ -118,7 +118,11 @@ export interface StoreSnapshot {
    * later messages nor markRead move it; selecting a conversation or repo recomputes it.
    */
   readonly newMarkerBeforeId: number | null;
-  /** Why the last send failed, shown as "Not sent: " plus its message; null after a success, a new send, or another conversation or repo. */
+  /**
+   * Why the last send failed, shown as "Not sent: " plus its message; null after a success, a new send, or another
+   * conversation or repo. In a session the bridge revoked it is the fixed answer of revoked-send.ts, with code
+   * `access_revoked`, since nothing is asked of the bridge any more.
+   */
   readonly sendError: ErrorInfo | null;
   /**
    * What the bridge told the sender about the last send it accepted, or null: after a send with nothing to
@@ -165,11 +169,25 @@ export interface Store {
    * Sends to the selected repo. True once the bridge accepted it: the message then shows in its
    * conversation, which appears if it is a new DM, and `sendNotice` says what the bridge reported about
    * it, if anything. False when it was refused or the bridge could not be reached, with `sendError` set;
-   * also false, with no request, when nothing is selected.
+   * false too, with `sendError` set to the revoked-send.ts answer and no request, when the bridge revoked the
+   * member (the draft is the view's to keep); and false, with no request and nothing said, when nothing is selected.
    */
   send(draft: SendDraft): Promise<boolean>;
   /** The member closes the send notice. Does nothing when there is none. */
   dismissSendNotice(): void;
+  /**
+   * Runs `rotate`, the admin panel's call that rotates the token of `handle` and answers with the new one, and
+   * returns what it answers. When `handle` is the signed-in member and this session signed in with a token, the
+   * old token is dead as soon as the bridge has answered, and the session would end with it (a 401 on the next
+   * request, `bye token_rotated` on the stream); so the store takes the new token into its closure, in memory
+   * only and before anything else can use the old one, and goes on as the same session: nothing is reloaded,
+   * the selection and the marker stay, the streams reopen on the new token. A 401 for the old token that
+   * arrives afterwards is no news (the request is asked again with the new one), and while the answer is
+   * still on its way a 401 waits for it instead of ending the session; a 401 for the current token ends the
+   * session as always. Another member's token, and a session signed in through the tailnet identity (it has
+   * no token to replace), are left alone: `rotate` just runs. A failure of `rotate` is passed on unchanged.
+   */
+  followRotation<T extends { readonly token: string }>(handle: string, rotate: () => Promise<T>): Promise<T>;
   /** Loads the next older page of the selected repo. Does nothing when `hasMore` is false; overlapping calls share one request. */
   loadOlder(): Promise<void>;
   /** Moves the selected repo's read pointer forward to the newest message of the selected conversation. Never backward. */

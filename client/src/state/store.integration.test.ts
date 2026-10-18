@@ -4,7 +4,7 @@
 // without it, and skipped is not passing.
 import { existsSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createApi, type FetchLike } from '../api/client';
+import { createApi, type Api, type FetchLike } from '../api/client';
 import { ERROR_CODES } from '../api/errors';
 import { CHANNEL } from '../api/types';
 import { createStore } from './store';
@@ -25,7 +25,7 @@ interface Reply {
 interface Env {
   readonly base: string;
   readonly tokens: Readonly<Record<string, string>>;
-  addMember(handle: string): string;
+  addMember(handle: string, options?: { readonly role?: 'admin' | 'member' }): string;
   api(who: string, method: string, path: string, body?: unknown): Promise<Reply>;
   /** Rows in Chatter's messages table, read straight from its database. */
   count(): number;
@@ -64,11 +64,25 @@ describe.skipIf(!HAVE_CHATTER)('the store against the real bridge and Chatter (n
       urls.push(url);
       return fetch(url, init);
     };
-    const store = createStore({ api: (getToken) => createApi({ baseUrl: env.base, getToken, fetch: counting }), streamTiming: TIMING });
+    // The Api the store is built around, kept as services.ts keeps it, for what the admin panel asks of the bridge.
+    const built: { api?: Api } = {};
+    const store = createStore({
+      api: (getToken) => (built.api = createApi({ baseUrl: env.base, getToken, fetch: counting })),
+      streamTiming: TIMING,
+    });
     stores.push(store);
     const incoming: IncomingMessage[] = [];
     store.onIncoming((message) => incoming.push(message));
-    return { store, requests, incoming, now: (): StoreSnapshot => store.getSnapshot() };
+    return {
+      store,
+      requests,
+      incoming,
+      now: (): StoreSnapshot => store.getSnapshot(),
+      panel: (): Api => {
+        if (!built.api) throw new Error('the store built no Api');
+        return built.api;
+      },
+    };
   }
 
   async function signedIn(handle: string) {
@@ -85,6 +99,8 @@ describe.skipIf(!HAVE_CHATTER)('the store against the real bridge and Chatter (n
   beforeAll(async () => {
     env = await (await loadMakeEnv())();
     for (const handle of ['ana', 'ben', 'cleo', 'dora', 'eve']) env.addMember(handle);
+    // Its own admin, whose token the test rotates: flan's is what the other tests call the bridge with.
+    env.addMember('ada', { role: 'admin' });
   }, SLOW);
 
   afterAll(async () => {
@@ -148,6 +164,33 @@ describe.skipIf(!HAVE_CHATTER)('the store against the real bridge and Chatter (n
     await until(() => when(eve.now().session.status === 'signed-out'), 'signed out');
     expect(eve.now().session).toEqual({ status: 'signed-out', error: { code: ERROR_CODES.badToken, message: 'token is invalid or revoked' } });
     expect(eve.now().messages).toEqual([]);
+  }, SLOW);
+
+  // V5 finding 2, against the real bridge: it ends the member's streams with `bye token_rotated` before it
+  // answers and refuses the old token from then on. The session must go on, on the new token.
+  it('an admin who rotates their own token stays signed in on the new one: the streams reopen with it, and the old one is refused', async () => {
+    const ada = await signedIn('ada');
+    const first = env.tokens['ada'];
+    if (!first) throw new Error('no token for ada');
+    const before = ada.now();
+    const answered = await ada.store.followRotation('ada', () => ada.panel().rotateToken('ada'));
+    expect(answered.token).not.toBe(first);
+    expect((await env.api(answered.token, 'GET', '/v1/me')).status).toBe(200);
+    expect((await env.api(first, 'GET', '/v1/me')).status).toBe(401);
+    // Longer than a reconnect's backoff, so a session that was going to end would have by now.
+    await pause(1_200);
+    expect(ada.now().session).toBe(before.session);
+    await until(() => when(ada.now().connection === 'online'), 'ada online again');
+
+    // The new stream is live: a message from another member arrives through it.
+    const ben = await signedIn('ben');
+    expect(await ben.store.send({ to: CHANNEL, body: 'after the rotation' })).toBe(true);
+    await until(() => ada.now().messages.find((m) => m.body === 'after the rotation'), 'ada to see it');
+    // And what the admin panel asks next is answered, with the token the store holds now.
+    expect((await ada.panel().members()).members.some((member) => member.handle === 'ada')).toBe(true);
+    expect(ada.now().session.status).toBe('signed-in');
+    // The new token never went into a URL.
+    expect(ada.requests.some((request) => request.includes(answered.token))).toBe(false);
   }, SLOW);
 
   it('never put a token in a URL', () => {

@@ -2,6 +2,7 @@
 // snapshot, web storage, a cookie, a property of the store, or an error. jsdom, because web storage
 // exists only there.
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Api } from '../api/client';
 import { ManualClock } from '../api/clock';
 import { ERROR_CODES } from '../api/errors';
 import { CHANNEL } from '../api/types';
@@ -103,6 +104,73 @@ describe('the member\'s token', () => {
     expect(holders[0]?.()).toBeNull();
     expect(leaks(), 'places the token was found in').toBe(0);
     expect(bridge.requests.filter((r) => r.route === BRIDGE_ROUTES.me).map((r) => r.withToken)).toEqual([false, true, true, true]);
+    store.dispose();
+  });
+
+  // V5 finding 2: the admin's new token comes from the rotation's answer, and from then on it is the
+  // session's token. It is on screen in the "New token" dialog (the panel's, not the store's) and nowhere else.
+  it('holds a token it took over after its own rotation as it holds the one it signed in with, and forgets it on sign-out', async () => {
+    const clock = new ManualClock();
+    const bridge = new FakeBridge({ clock });
+    const holders: Array<() => string | null> = [];
+    const panels: Api[] = [];
+    const errors: unknown[] = [];
+    const store = createStore({
+      api: (getToken) => {
+        holders.push(getToken);
+        const api = bridge.api(getToken);
+        panels.push(api);
+        return api;
+      },
+      clock,
+      random: () => 0.5,
+      streamTiming: QUIET,
+      reportError: (error) => errors.push(error),
+    });
+    const snapshots: StoreSnapshot[] = [];
+    store.subscribe((snapshot) => snapshots.push(snapshot));
+    await settle();
+    const first = bridge.tokenOf('flan');
+    expect(await store.signIn(first)).toBe(true);
+    await settle();
+    const panel = panels[0];
+    if (!panel) throw new Error('the store built no Api');
+
+    const answered = await store.followRotation('flan', () => panel.rotateToken('flan'));
+    await settle();
+    const fresh = answered.token;
+    expect(fresh).not.toBe(first);
+    expect(holders[0]?.()).toBe(fresh);
+
+    // Everything a session does on the new token, refusals included.
+    await store.send({ to: CHANNEL, body: 'after the rotation' });
+    await store.send({ to: 'nobody-at-all', body: 'a refusal' });
+    bridge.write({ from: 'mira', body: 'hi flan' });
+    await settle();
+    await store.markRead();
+    await store.refreshDirectory();
+    await store.followRotation('mira', () => panel.rotateToken('mira'));
+    await settle();
+    // A count, never the strings themselves: a failure must not print what it guards. The token of the member
+    // rotated after it is a second secret, and it is not the session's, so it is not held at all.
+    const other = bridge.tokenOf('mira');
+    const leaks = (secret: string): number => [
+      ...strings(snapshots),
+      ...strings(store.getSnapshot()),
+      ...strings(store),
+      ...webStorage(),
+      document.cookie,
+      ...errors.map(String),
+    ].filter((text) => text.includes(secret)).length;
+    expect(leaks(fresh), 'places the adopted token was found in').toBe(0);
+    expect(leaks(first), 'places the replaced token was found in').toBe(0);
+    expect(leaks(other), 'places the token of another member was found in').toBe(0);
+    expect(holders[0]?.()).toBe(fresh);
+    expect(errors).toEqual([]);
+
+    store.signOut();
+    expect(holders[0]?.()).toBeNull();
+    expect(leaks(fresh), 'places the adopted token was found in').toBe(0);
     store.dispose();
   });
 });

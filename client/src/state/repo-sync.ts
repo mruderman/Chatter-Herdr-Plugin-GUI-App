@@ -105,6 +105,21 @@ export class RepoSync {
     this.waiters.clear();
   }
 
+  /**
+   * Replaces the stream by one opened now, from the same cursor and epoch: the credential the api holds changed
+   * (the member's own token was rotated), and the stream is bound to the old one, which the bridge has ended.
+   * Not a new `run`, so a page, an older page or a list that is on its way still arrives. A repo with no stream
+   * has nothing to replace: one still loading opens its stream with whatever the api holds when its page is
+   * here, and one waiting to try again does the same when its timer fires.
+   */
+  restartStream(): void {
+    if (this.stopped || this.stream === null) return;
+    // Closing reports `closed` with reason `aborted`, which onStatus ignores after it forgets the handle.
+    this.stream.close();
+    this.openStream();
+    this.host.changed();
+  }
+
   /** The next older page. Overlapping calls share one request; a failure leaves `hasMore` for another try. */
   loadOlder(): Promise<void> {
     if (this.stopped || !this.hasMore) return Promise.resolve();

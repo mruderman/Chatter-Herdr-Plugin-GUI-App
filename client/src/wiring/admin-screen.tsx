@@ -4,7 +4,13 @@
 // again, so the composer's "To" select and @-completion see the new member list. It is told the
 // signed-in member's handle, so that revoking or rotating one's own account says so (ui-contract
 // section 8).
-import { AdminView } from '../features/admin';
+//
+// One call does not go straight to the Api: rotating a token. It runs inside the store's followRotation,
+// so that when the admin rotates their own token the session goes on with the new one, in the same tick
+// the bridge's answer arrives and before the panel (which reloads its lists the moment the call ends)
+// can ask for anything with the dead one. The panel itself knows nothing of this: it sees the answer.
+import { useMemo } from 'preact/hooks';
+import { AdminView, type AdminApi } from '../features/admin';
 import { useSnapshot, useStore } from '../state/provider';
 import { useServices } from './services-context';
 
@@ -12,7 +18,11 @@ export function AdminScreen() {
   const { api } = useServices();
   const store = useStore();
   const { session } = useSnapshot();
+  const admin = useMemo<AdminApi>(
+    () => ({ ...api, rotateToken: (handle, options) => store.followRotation(handle, () => api.rotateToken(handle, options)) }),
+    [api, store],
+  );
   // The shell offers Admin only while an admin is signed in; the check is for the type.
   const selfHandle = session.status === 'signed-in' ? session.me.handle : undefined;
-  return <AdminView api={api} refreshDirectory={() => store.refreshDirectory()} selfHandle={selfHandle} />;
+  return <AdminView api={admin} refreshDirectory={() => store.refreshDirectory()} selfHandle={selfHandle} />;
 }

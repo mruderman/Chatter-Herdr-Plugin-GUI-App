@@ -2,15 +2,18 @@
 // start, follows up to 8 repos at once (repo-sync.ts) and shows the selected one, and it words and
 // orders everything the contract fixes as the fake store does (conversations.ts, announce.ts),
 // because the views are tested against the fake. The member's token lives in this closure and
-// nowhere else: not in a snapshot, storage, a URL, a log or an error.
+// nowhere else: not in a snapshot, storage, a URL, a log or an error. When the admin rotates their own
+// token the closure takes the new one over (followRotation) and the session goes on.
 import { createApi, type Api } from '../api/client';
 import { systemClock, type Clock } from '../api/clock';
+import { ApiError } from '../api/errors';
 import type { StreamTiming } from '../api/stream';
 import { CHANNEL, type Directory, type Me, type Message, type Repo, type SendResult } from '../api/types';
 import { Announcer } from './announce';
 import { belongsTo, CHANNEL_CONVERSATION, conversationOf, dmId, ordered } from './conversations';
 import { classify, keepTrying, retryDelay, UNAUTHORIZED } from './failure';
 import { RepoSync, type SyncHost } from './repo-sync';
+import { REVOKED_SEND } from './revoked-send';
 import { announcementOf, makeNotice } from './send-notice';
 import type {
   Connection,
@@ -181,7 +184,15 @@ export function createStore(options: StoreOptions = {}): Store {
   const report = options.reportError ?? reportLater;
   // The member's token. Only getToken below reads it, on every request.
   let token: string | null = null;
-  const api = (options.api ?? ((getToken) => createApi({ getToken })))(() => token);
+  // Bumped whenever the token changes hands (sign-in, sign-out, a rotation followed), like `attempt` below for
+  // the session: a request remembers the one it was sent under, so that a refusal can be told to be about a
+  // credential that has been replaced since (steady, below).
+  let credential = 0;
+  // The rotations of the member's own token that are on their way: the bridge has already ended the old token
+  // when it answers, and the answer is what carries the new one (followRotation).
+  const rotating = new Set<Promise<void>>();
+  const raw = (options.api ?? ((getToken) => createApi({ getToken })))(() => token);
+  const api = steady(raw);
 
   const listeners = new Set<(snapshot: StoreSnapshot) => void>();
   const incomingListeners = new Set<(incoming: IncomingMessage) => void>();
@@ -275,6 +286,46 @@ export function createStore(options: StoreOptions = {}): Store {
 
   // -------------------------------------------------------------------------------------- session
 
+  function setToken(next: string | null): void {
+    token = next;
+    credential += 1;
+  }
+
+  /**
+   * Asks again, once the credential is the new one, a request that the bridge refused with 401 for a credential
+   * that was replaced after the request was sent: the refusal is about the old token and says nothing about the
+   * one held now. Where it matters is the repo list, a newest page and a stream, whose refusal ends the session.
+   * While the member's own token is being rotated, a 401 for the current token waits for the rotation's answer
+   * first, since the bridge ends the old token before it answers and a reconnect can be refused in between.
+   * A 401 for the credential held when it arrives, with no rotation to wait for, passes on as it always did.
+   */
+  async function again<T>(call: () => Promise<T>): Promise<T> {
+    for (;;) {
+      // The credential the call is sent under: createApi reads the token synchronously when it is called.
+      const made = credential;
+      try {
+        return await call();
+      } catch (failure) {
+        if (!(failure instanceof ApiError) || failure.status !== UNAUTHORIZED || token === null) throw failure;
+        if (made === credential && rotating.size > 0) await Promise.all([...rotating]);
+        if (made === credential || token === null) throw failure;
+      }
+    }
+  }
+
+  /** The Api the session's own requests go through. Sign-in (`me`) and `send` are left alone: each answers for itself. */
+  function steady(inner: Api): Api {
+    return {
+      ...inner,
+      directory: (o) => again(() => inner.directory(o)),
+      repos: (o) => again(() => inner.repos(o)),
+      messages: (repo, query, o) => again(() => inner.messages(repo, query, o)),
+      conversations: (repo, o) => again(() => inner.conversations(repo, o)),
+      markRead: (repo, upToId, o) => again(() => inner.markRead(repo, upToId, o)),
+      openStream: (repo, request) => again(() => inner.openStream(repo, request)),
+    };
+  }
+
   function setSignedOut(error: ErrorInfo | null): void {
     // The same object when nothing changed, so no snapshot is published for it.
     if (session.status === 'signed-out' && session.error === null && error === null) return;
@@ -299,7 +350,7 @@ export function createStore(options: StoreOptions = {}): Store {
 
   function endSession(error: ErrorInfo | null): void {
     endLive();
-    token = null;
+    setToken(null);
     announcer.reset();
     setSignedOut(error);
     publish();
@@ -571,7 +622,7 @@ export function createStore(options: StoreOptions = {}): Store {
     endLive();
     announcer.reset();
     const trimmed = given.trim();
-    token = trimmed === '' ? null : trimmed;
+    setToken(trimmed === '' ? null : trimmed);
     // Signed out, with the last error cleared, while the bridge is asked: the sign-in form stays up.
     setSignedOut(null);
     publish();
@@ -586,7 +637,7 @@ export function createStore(options: StoreOptions = {}): Store {
     } catch (failure) {
       if (id !== attempt || disposed) return false;
       asking = null;
-      token = null;
+      setToken(null);
       const read = classify(failure, controller.signal);
       if (read.kind === 'aborted') return false;
       if (read.kind === 'bug') report(read.error);
@@ -598,8 +649,17 @@ export function createStore(options: StoreOptions = {}): Store {
 
   async function send(draft: SendDraft): Promise<boolean> {
     const current = live;
-    const repo = current ? selectedSync(current) : null;
-    if (disposed || !current || current.revoked || !repo) return false;
+    if (disposed || !current) return false;
+    if (current.revoked) {
+      // Nothing is asked of the bridge and nothing is lost: the member is told, in the words of the Connection
+      // status, and the draft stays with the view. What is loaded stays readable (V5 finding 3).
+      current.sendNotice = null;
+      current.sendError = REVOKED_SEND;
+      publish();
+      return false;
+    }
+    const repo = selectedSync(current);
+    if (!repo) return false;
     const selection = current.selection;
     // A new send replaces whatever the last one left: its refusal, and the notice about it.
     if (current.sendError !== null || current.sendNotice !== null) {
@@ -719,6 +779,37 @@ export function createStore(options: StoreOptions = {}): Store {
     current.readRetries.delete(entry.sync.key);
   }
 
+  /**
+   * The new token takes the place of the old one in this closure, and the streams, which the bridge ended with
+   * the old token, reopen on it from their cursors. Nothing else is touched: it is the same session, so no
+   * page is reloaded and nothing the member sees moves. Called in the continuation of the call that carried the
+   * answer, before anything else can run with the old token; what was already sent with it is `again`'s.
+   */
+  function takeOver(current: Live, fresh: string): void {
+    setToken(fresh);
+    for (const repo of current.repos.values()) repo.restartStream();
+  }
+
+  async function followRotation<T extends { readonly token: string }>(handle: string, rotate: () => Promise<T>): Promise<T> {
+    const current = live;
+    // Only the member's own token ends this session when it is rotated, and only when the session holds one: a
+    // session through the tailnet identity has no token, and its streams just reconnect after the bye.
+    if (disposed || !current || current.revoked || token === null || handle !== current.me.handle) return rotate();
+    let done: () => void = () => undefined;
+    const waiting = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+    rotating.add(waiting);
+    try {
+      const answered = await rotate();
+      if (live === current && !disposed && !current.revoked && token !== null) takeOver(current, answered.token);
+      return answered;
+    } finally {
+      rotating.delete(waiting);
+      done();
+    }
+  }
+
   ask(0);
 
   return {
@@ -776,6 +867,8 @@ export function createStore(options: StoreOptions = {}): Store {
       current.sendNotice = null;
       publish();
     },
+
+    followRotation,
 
     loadOlder() {
       const current = live;

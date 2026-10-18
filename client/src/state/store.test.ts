@@ -27,6 +27,8 @@ const apiError = (name: string): ApiError => {
   return new ApiError(status, code, message);
 };
 const NETWORK = { code: CLIENT_ERROR_CODES.network, message: 'could not reach the bridge' };
+// What a send says in a revoked session: the Connection status's words (features/shell/types.ts), written out as the contract has them.
+const REVOKED_SEND = { code: CLIENT_ERROR_CODES.accessRevoked, message: 'Access revoked, so nothing was sent.' };
 const THOM_PAGE = parseMessagesPage(body('messages-thom'));
 const THOM_NEWEST = THOM_PAGE.messages.at(-1)?.id ?? 0;
 
@@ -365,6 +367,8 @@ describe('revocation', () => {
     expect(h.now().messages).toEqual(loaded);
     await h.advance(TEN_MINUTES);
     expect(await h.store.send({ to: CHANNEL, body: 'still here?' })).toBe(false);
+    // V5 finding 3: said, not silent. No request goes out for it (the count is checked below with the rest).
+    expect(h.now().sendError).toEqual(REVOKED_SEND);
     await h.store.loadOlder();
     await h.store.markRead();
     await h.store.refreshDirectory();
@@ -374,7 +378,39 @@ describe('revocation', () => {
     expect(h.bridge.requests.length).toBe(asked);
     expect(h.bridge.openStreams()).toBe(0);
     expect(h.clock.scheduled).toBe(0);
+    // Selecting another repo took the refusal away, as it does after any refusal.
     expect(h.now()).toMatchObject({ connection: 'revoked', sendError: null });
+  });
+
+  it('tells a member whose send is refused for revocation that nothing was sent, on every press, and sends nothing', async () => {
+    const h = await harness();
+    h.bridge.revoke('thom');
+    await settle();
+    const asked = h.bridge.requests.length;
+    const loaded = h.now().messages;
+    const notices: Array<StoreSnapshot['sendError']> = [];
+    h.store.subscribe((snapshot) => notices.push(snapshot.sendError));
+    for (let press = 0; press < 3; press += 1) {
+      expect(await h.store.send({ to: CHANNEL, body: 'is anybody there?' })).toBe(false);
+      expect(h.now().sendError).toEqual(REVOKED_SEND);
+    }
+    expect(h.bridge.requests.length).toBe(asked);
+    expect(h.bridge.rows(MAIN_REPO).map((row) => row.body)).not.toContain('is anybody there?');
+    // Everything stays readable: what was loaded is what is shown, and the session stays.
+    expect(h.now()).toMatchObject({ connection: 'revoked', session: { status: 'signed-in' } });
+    expect(h.now().messages).toEqual(loaded);
+    expect(notices.at(-1)).toEqual(REVOKED_SEND);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('takes the notice about an earlier send away when the next send is refused for revocation, as any new send does', async () => {
+    const h = await harness();
+    expect(await h.store.send({ to: CHANNEL, body: 'hello @nobody' })).toBe(true);
+    expect(h.now().sendNotice).not.toBeNull();
+    h.bridge.revoke('thom');
+    await settle();
+    expect(await h.store.send({ to: CHANNEL, body: 'hello again' })).toBe(false);
+    expect(h.now()).toMatchObject({ sendNotice: null, sendError: REVOKED_SEND });
   });
 });
 

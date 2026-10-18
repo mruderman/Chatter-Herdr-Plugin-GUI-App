@@ -280,6 +280,27 @@ describe('composer: sending (ui-contract section 3)', () => {
     expect(describedBy()).toContain(alert.id);
   });
 
+  // V5 finding 3: after the bridge revoked the member the composer stays as it is (everything stays readable)
+  // and a send used to go nowhere, with no word. Now it says so, in the words of the Connection status.
+  it('tells a member whose access was revoked that nothing was sent, keeps the draft, and does the same on every press', async () => {
+    const { fake, user } = setup();
+    act(() => fake.setConnection('revoked'));
+    await user.type(box(), 'is anybody there?{Enter}');
+    const alert = await findSendError();
+    expect(alert.textContent).toBe(`${COMPOSER_TEXT.sendErrorPrefix}Access revoked, so nothing was sent.`);
+    expect(box().value).toBe('is anybody there?');
+    expect(describedBy()).toContain(alert.id);
+    expect(fake.sent).toEqual([]);
+    // A second press gives a fresh alert, so that it is announced again; the draft is still there.
+    const first = alert;
+    await user.click(sendButton());
+    const again = await findSendError();
+    expect(again.textContent).toBe(first.textContent);
+    expect(again).not.toBe(first);
+    expect(box().value).toBe('is anybody there?');
+    expect(fake.sent).toEqual([]);
+  });
+
   it('asks the store about an agent the member may not address, and shows its refusal', async () => {
     const { send, user } = setup({ as: 'kieran' });
     await user.selectOptions(to(), 'codex');

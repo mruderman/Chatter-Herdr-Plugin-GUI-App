@@ -1,14 +1,15 @@
-// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 2). Written to FAIL on the current code.
-// An admin who signed in with a token and rotates their OWN token is shown the "New token for {handle}"
-// dialog for about 60 ms: the bridge ends the old token's stream (`bye token_rotated`), the client's next
-// requests answer 401, and the shell replaces the whole app with the Sign in view. The new token existed
-// only in that dialog ("This token is shown once"), so it is lost and the admin is locked out until a
-// token is rotated from the CLI. The confirmation dialog warns that the current token stops working, but
-// not that the new one cannot be read. Runs against its own bridge so that no cast member is touched.
-import { loadBridgeHelpers, type BridgeEnv } from '../e2e/harness/bridge';
-import { expect, signIn, test } from '../e2e/harness/fixtures';
-import { UI, ui } from '../e2e/harness/ui';
-import { POLL_MS, type World } from '../e2e/harness/world';
+// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 2), fixed: an admin who signed in with a token and
+// rotates their OWN token is shown the "New token for {handle}" dialog and it STAYS until they close it. The bridge
+// ends the old token's stream at once (`bye token_rotated`) and refuses the old token from then on, which used to
+// swap the whole app for the Sign in view about 60 ms after the dialog opened and take the one-time token with it
+// (the admin was then locked out until a token was rotated from the CLI). The store now takes the new token over in
+// the moment the answer arrives (state/store.ts, followRotation), so this guards the dialog itself: it is still
+// there well after the stream's reconnect, with the token in it. own-token-rotation.spec.ts follows the session
+// on the new token after that. Runs against its own bridge so that no cast member is touched.
+import { loadBridgeHelpers, type BridgeEnv } from './harness/bridge';
+import { expect, signIn, test } from './harness/fixtures';
+import { UI, ui } from './harness/ui';
+import { POLL_MS, type World } from './harness/world';
 
 const HANDLE = 'selfadmin';
 

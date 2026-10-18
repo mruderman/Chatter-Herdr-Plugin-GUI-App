@@ -9,6 +9,7 @@ import { ERROR_CODES } from '../api/errors';
 import { parseDirectory, parseMe, parseMessagesPage, parseRepos } from '../api/guards';
 import { CHANNEL, type Directory, type Me, type Message, type SendResult } from '../api/types';
 import { body, recordedError } from '../../test/fixtures/recorded';
+import { REVOKED_SEND } from './revoked-send';
 import { announcementOf, makeNotice } from './send-notice';
 import type {
   Announcement,
@@ -561,6 +562,11 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       if (disposed || !repo || !member || !directory) return Promise.resolve(false);
       // A new send replaces whatever the last one left, whether this one is refused or not.
       sendNotice = null;
+      if (connection === 'revoked') {
+        sendError = REVOKED_SEND;
+        publish();
+        return Promise.resolve(false);
+      }
       const refused = refuseWrite(draft, member, directory);
       if (refused) {
         sendError = { code: refused.code, message: refused.message };
@@ -600,6 +606,8 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
       sendNotice = null;
       publish();
     },
+
+    followRotation: (_handle, rotate) => rotate(),
 
     loadOlder() {
       const repo = current();

@@ -650,6 +650,18 @@ describe('fake store: lifecycle', () => {
     expect(f.now().connection).toBe('revoked');
   });
 
+  // V5 finding 3: the Connection says "Access revoked" and a send used to go nowhere without a word. The real
+  // store's words, and conformance.test.ts holds the two stores to the same ones.
+  it('after the connection turned revoked, a send is refused with the words the Connection status uses, and nothing is stored', async () => {
+    const f = fake();
+    f.store.setConnection('revoked');
+    const before = f.now().messages;
+    expect(await f.store.send({ to: CHANNEL, body: 'anyone there?' })).toBe(false);
+    expect(f.now().sendError).toEqual({ code: 'access_revoked', message: 'Access revoked, so nothing was sent.' });
+    expect(f.now().messages).toEqual(before);
+    expect(f.store.sent).toEqual([]);
+  });
+
   it('after dispose, notifies nobody and drops pending announcements', () => {
     const f = fake();
     f.store.receive({ from: 'mira', body: 'one' });
