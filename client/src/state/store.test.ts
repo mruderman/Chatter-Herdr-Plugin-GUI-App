@@ -732,17 +732,14 @@ describe('the conversation list', () => {
     expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', 'DM with codex', 'DM with grace', 'DM with kieran', 'DM with mira']);
   });
 
-  it('opens an entry none of whose messages is loaded as an empty conversation, with older pages left, and pages its messages in', async () => {
+  it('opens an entry none of whose messages is loaded as an empty conversation, with older pages left, and pages its messages in with one press', async () => {
     const h = await harness({ pageSize: 2 });
     h.open('DM with mira');
     expect(h.now()).toMatchObject({ selectedConversation: 'dm:["mira","thom"]', messages: [], hasMore: true, newMarkerBeforeId: null });
-    let pages = 0;
-    while (h.now().messages.length === 0 && h.now().hasMore && pages < 10) {
-      await h.store.loadOlder();
-      pages += 1;
-    }
+    // Four pages of two stand between the newest page and the DM, and one press asks for all of them (V5 finding 5).
+    await h.store.loadOlder();
     expect(h.now().messages.map((m) => m.id)).toEqual([4, 5]);
-    expect(pages).toBe(4);
+    expect(h.bridge.requests.filter((r) => r.route === BRIDGE_ROUTES.messages && r.query?.beforeId !== undefined)).toHaveLength(4);
   });
 
   it.each([
@@ -885,18 +882,19 @@ describe('the conversation list', () => {
 });
 
 describe('paging, the marker and the read pointer', () => {
-  it('pages back with before_id of the lowest id held; overlapping calls share one request; a page may add nothing here', async () => {
-    const h = await harness({ as: 'flan', pageSize: 2 });
-    h.open('DM with codex');
+  // #chat only: a press in a DM keeps asking until the conversation gains a message (V5 finding 5, load-older.test.ts).
+  it('pages #chat back with before_id of the lowest id held, one page per press; overlapping calls share one request; a page may add nothing here', async () => {
+    // flan's newest page is 16, a DM, and so is the page before it: #chat shows nothing and still has one press's worth to ask.
+    const h = await harness({ as: 'flan', pageSize: 1 });
     const shown = h.now().messages;
-    expect(shown.map((m) => m.id)).toEqual([15, 16]);
+    expect(shown).toEqual([]);
     h.bridge.hold(BRIDGE_ROUTES.messages);
     const first = h.store.loadOlder();
     const second = h.store.loadOlder();
     expect(second).toBe(first);
     h.bridge.release(BRIDGE_ROUTES.messages);
     await first;
-    expect(h.bridge.requests.filter((r) => r.route === BRIDGE_ROUTES.messages && r.query?.beforeId !== undefined).map((r) => r.query)).toEqual([{ beforeId: 15, limit: 2 }]);
+    expect(h.bridge.requests.filter((r) => r.route === BRIDGE_ROUTES.messages && r.query?.beforeId !== undefined).map((r) => r.query)).toEqual([{ beforeId: 16, limit: 1 }]);
     expect(h.now().messages).toEqual(shown);
     expect(h.now().hasMore).toBe(true);
   });

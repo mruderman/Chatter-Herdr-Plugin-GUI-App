@@ -95,8 +95,9 @@ describe('the Chat view (ui-contract sections 2, 3 and 5)', () => {
     await user.click(screen.getByRole('button', { name: 'DM with mira' }));
     expect(screen.getByRole('button', { name: 'DM with mira' }).getAttribute('aria-current')).toBe('true');
     expect(screen.getByRole('log', { name: 'Messages' }).textContent).toBe('Its messages are older than the ones loaded. Press Load older messages to bring them in.');
-    // The recording holds 13 rows thom may see and the DM is rows 4 and 5, so four pages of two bring it in.
-    for (let page = 0; page < 4; page += 1) await user.click(screen.getByRole('button', { name: 'Load older messages' }));
+    // The recording holds 13 rows thom may see and the DM is rows 4 and 5, four pages of two back: one press asks for
+    // all of them, because a press in a DM keeps asking until a message of it comes (V5 finding 5).
+    await user.click(screen.getByRole('button', { name: 'Load older messages' }));
     expect(screen.getByRole('log', { name: 'Messages' }).textContent).not.toContain('older than the ones loaded');
     expect(screen.getAllByRole('article').length).toBeGreaterThan(0);
   });

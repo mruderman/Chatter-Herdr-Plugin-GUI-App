@@ -6,12 +6,25 @@ import type { Clock } from '../api/clock';
 import { connectStream, type StreamHandle, type StreamStatus, type StreamTiming } from '../api/stream';
 import { CHANNEL, type Me, type Message, type MessagesPage } from '../api/types';
 import { CACHE_LIMIT, merge, newest } from './cache';
-import { conversationOf, conversationOfPair } from './conversations';
+import { belongsTo, conversationOf, conversationOfPair } from './conversations';
 import { classify, keepTrying, retryDelay } from './failure';
-import type { Conversation, ConversationId, ErrorInfo } from './types';
+import type { Conversation, ConversationId, ErrorInfo, OlderResult } from './types';
 
 /** The bridge's largest page (bridge/src/messages.js), for catching up after a send. */
 const MAX_PAGE = 500;
+
+/**
+ * How far one press of "Load older messages" in a DM may look for a message of that DM before it gives up and
+ * says so (V5 finding 5): this many pages or this many messages, whichever comes first. The bridge pages over
+ * every conversation the member may see, so a DM further back than a page needs several pages, and a bound
+ * keeps a DM with nothing older from reading the whole history in one go. fake.ts takes both numbers from here, so the
+ * two stores cannot disagree on them; conformance.test.ts runs the same cases on both.
+ */
+export const OLDER_MAX_PAGES = 10;
+export const OLDER_MAX_MESSAGES = 1_000;
+
+/** The press found, or has nothing to say: the common answer, so the same frozen object everywhere. */
+export const NOT_LOOKED_BACK: OlderResult = Object.freeze({ lookedBack: null });
 
 /**
  * Where the repo stands, for the Connection status: loading or reloading its newest page; its
@@ -79,7 +92,7 @@ export class RepoSync {
   // Bumped on stop and on every epoch change: an answer to an earlier run is dropped.
   private run = 0;
   private stopped = false;
-  private older: Promise<void> | null = null;
+  private older: Promise<OlderResult> | null = null;
   private listing: Promise<void> | null = null;
   private readonly waiters = new Set<Waiter>();
 
@@ -120,24 +133,47 @@ export class RepoSync {
     this.host.changed();
   }
 
-  /** The next older page. Overlapping calls share one request; a failure leaves `hasMore` for another try. */
-  loadOlder(): Promise<void> {
-    if (this.stopped || !this.hasMore) return Promise.resolve();
+  /**
+   * The next older page. For `wanted`, a DM (any id but the channel's), the pages after it too, one at a time,
+   * until a page adds a message of it, the repo has no older page left, or OLDER_MAX_PAGES / OLDER_MAX_MESSAGES
+   * have been loaded: the bridge pages over everything the member may see, so the first page may hold none of the
+   * conversation on screen (V5 finding 5). Without `wanted`, or for the channel, it is the one page it always was.
+   * Overlapping calls share one chain, the one the first of them started: it looks for that call's conversation, and
+   * the feed, which holds its button down for the whole chain, never asks for another meanwhile. A failure ends the
+   * chain without a word and leaves `hasMore` as the last page left it, for another try; so does a stop, a sign-out,
+   * or a new epoch, and nothing is asked once the repo is stopped. The answer says how far it looked only when it
+   * gave up at its bound.
+   */
+  loadOlder(wanted: ConversationId | null = null): Promise<OlderResult> {
+    if (this.stopped || !this.hasMore) return Promise.resolve(NOT_LOOKED_BACK);
     if (this.older) return this.older;
     const run = this.run;
-    const lowest = this.messages[0]?.id;
-    const query = lowest === undefined ? { limit: this.host.pageSize } : { beforeId: lowest, limit: this.host.pageSize };
-    this.older = (async () => {
+    const seeking = wanted !== null && wanted !== CHANNEL ? wanted : null;
+    this.older = (async (): Promise<OlderResult> => {
+      let pages = 0;
+      let loaded = 0;
       try {
-        const page = await this.host.api.messages(this.key, query, { signal: this.host.signal });
-        // A page from another epoch belongs to no one: the stream's resync reloads the repo.
-        if (run !== this.run || page.epoch !== this.epoch) return;
-        this.absorb(page.messages, true);
-        this.hasMore = page.has_more;
-        this.host.changed();
+        for (;;) {
+          // Before every request, not only the first: a listener told of the last page may have ended the session.
+          if (run !== this.run) return NOT_LOOKED_BACK;
+          const lowest = this.messages[0]?.id;
+          const query = lowest === undefined ? { limit: this.host.pageSize } : { beforeId: lowest, limit: this.host.pageSize };
+          const page = await this.host.api.messages(this.key, query, { signal: this.host.signal });
+          // A page from another epoch belongs to no one: the stream's resync reloads the repo.
+          if (run !== this.run || page.epoch !== this.epoch) return NOT_LOOKED_BACK;
+          const added = this.absorb(page.messages, true);
+          this.hasMore = page.has_more;
+          this.host.changed();
+          pages += 1;
+          loaded += page.messages.length;
+          // A message found on the last page the bound allows still counts as found, so the bound is read after it.
+          if (seeking === null || !this.hasMore || added.some((message) => belongsTo(message, seeking))) return NOT_LOOKED_BACK;
+          if (pages >= OLDER_MAX_PAGES || loaded >= OLDER_MAX_MESSAGES) return Object.freeze({ lookedBack: loaded });
+        }
       } catch (failure) {
         const read = classify(failure, this.host.signal);
         if (read.kind === 'bug') this.host.report(read.error);
+        return NOT_LOOKED_BACK;
       } finally {
         if (run === this.run) this.older = null;
       }

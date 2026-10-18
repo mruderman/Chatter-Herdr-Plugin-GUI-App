@@ -16,6 +16,23 @@
 }
 
 /*
+ * The button and, beside it, what a press is doing or did (V5 finding 5). One row, so a line of words appearing or going
+ * does not change the height of what is above the log and moves no message; the words wrap under the button only
+ * when the row is too narrow for both.
+ */
+.feed__older-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+
+.feed__older-status {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
  * The log scrolls by itself so the composer stays in reach below it. It takes the height the window has
  * left, so the newest message and the message box fit on one screen, and never less than 12rem: a short
  * window or large text leaves it that floor and the page scrolls instead. Its flex basis is 0, not its

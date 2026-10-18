@@ -730,6 +730,78 @@ describe.each([
       });
     });
 
+    // V5 finding 5. The repo pages as the bridge does, over everything the member may see, so one press in a DM
+    // that is further back than a page used to load rows of other conversations and change nothing on screen. A
+    // press in a DM now keeps asking until a message of it is added, the history ends, or 10 pages or 1,000
+    // messages have been loaded; #chat stays one page. load-older.test.ts has the real store's requests; here the
+    // fake store and the real one must agree on what the member is left with. thom sees 13 rows (his DMs are 4 and
+    // 5 with mira, 6 with grace, 8 with codex), flan 15 (and 15 and 16 with codex); 10 is a mention copy nobody sees.
+    describe('one press of "Load older messages" in a direct message conversation', () => {
+      const ids = (d: Driver): number[] => d.now().messages.map((m) => m.id);
+
+      it('brings in a DM that is four pages back, and leaves the button for the rest of the history', async () => {
+        const d = await make({ pageSize: 2 });
+        d.open('DM with mira');
+        expect(ids(d)).toEqual([]);
+        expect(await d.store.loadOlder()).toEqual({ lookedBack: null });
+        await d.settle();
+        expect(ids(d)).toEqual([4, 5]);
+        expect(d.now().hasMore).toBe(true);
+      });
+
+      it('does the same for the admin\'s observed pair', async () => {
+        const d = await make({ as: 'flan', pageSize: 2 });
+        d.open('DM mira to thom');
+        expect(await d.store.loadOlder()).toEqual({ lookedBack: null });
+        await d.settle();
+        expect(ids(d)).toEqual([4, 5]);
+        expect(d.now().hasMore).toBe(true);
+      });
+
+      it('counts a message on the tenth page as found: pages of one reach id 5 for flan on exactly that page', async () => {
+        const d = await make({ as: 'flan', pageSize: 1 });
+        d.open('DM mira to thom');
+        expect(await d.store.loadOlder()).toEqual({ lookedBack: null });
+        await d.settle();
+        expect(ids(d)).toEqual([5]);
+        expect(d.now().hasMore).toBe(true);
+      });
+
+      it('gives up after 10 pages with none of the conversation and says how many messages it looked through, then ends when the history does', async () => {
+        const d = await make({ as: 'flan', pageSize: 1 });
+        d.open('DM with codex');
+        expect(ids(d)).toEqual([16]);
+        expect(await d.store.loadOlder()).toEqual({ lookedBack: null });
+        await d.settle();
+        expect(ids(d)).toEqual([15, 16]);
+        // Nothing older is flan's with codex: 14 down to 4 are ten pages of other conversations.
+        expect(await d.store.loadOlder()).toEqual({ lookedBack: 10 });
+        await d.settle();
+        expect(ids(d)).toEqual([15, 16]);
+        expect(d.now().hasMore).toBe(true);
+        // 3, 2 and 1 are the end of the history: not the bound, so nothing is said, and the button goes.
+        expect(await d.store.loadOlder()).toEqual({ lookedBack: null });
+        await d.settle();
+        expect(ids(d)).toEqual([15, 16]);
+        expect(d.now().hasMore).toBe(false);
+      });
+
+      it('stays one page for #chat', async () => {
+        const d = await make({ pageSize: 2 });
+        expect(ids(d)).toEqual([13, 14]);
+        expect(await d.store.loadOlder()).toEqual({ lookedBack: null });
+        await d.settle();
+        expect(ids(d)).toEqual([11, 12, 13, 14]);
+        expect(d.now().hasMore).toBe(true);
+      });
+
+      it('says nothing, and does nothing, when there is nothing older', async () => {
+        const d = await make();
+        expect(d.now().hasMore).toBe(false);
+        expect(await d.store.loadOlder()).toEqual({ lookedBack: null });
+      });
+    });
+
     it('puts the marker before the first message past the read pointer, and keeps it there', async () => {
       const d = await make({ as: 'mira' });
       const firstUnread = recordedPage('mira').find((m) => m.to === CHANNEL && m.id > 5);

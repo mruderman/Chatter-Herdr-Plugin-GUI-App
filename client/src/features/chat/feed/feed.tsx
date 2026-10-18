@@ -24,6 +24,19 @@ export const FEED_TEXT = {
    * than the newest page, and the "Load older messages" button above the log brings them in (V5 finding 9).
    */
   olderUnloaded: 'Its messages are older than the ones loaded. Press Load older messages to bring them in.',
+  /**
+   * For a screen reader only, in the status line beside the button, while a press in a DM keeps looking for a message
+   * of it, which may be several requests (V5 finding 5). Sighted readers have the button's busy look (dashed, muted),
+   * which is the busy treatment it always had: words beside it would wrap under it on a narrow screen and move the log.
+   * The button's own name stays "Load older messages".
+   */
+  loadingOlder: 'Loading older messages...',
+  /**
+   * Beside the button when a press gave up at its bound (10 pages or 1,000 messages) and found none of the open DM:
+   * `count` is what that press loaded, whichever conversation the messages belong to. The button stays for the next try.
+   */
+  lookedBack: (count: number): string =>
+    `Looked back ${count} messages and found none of this conversation. Press Load older messages to look further.`,
 } as const;
 
 // The labels' tones only repeat what their words say.
@@ -128,8 +141,15 @@ function OlderButton({ busy, onLoad, onLeaveWithFocus }: OlderButtonProps) {
     [],
   );
   return (
-    // aria-disabled rather than disabled while a page loads, so the button keeps focus.
-    <button ref={ref} type="button" class="feed__older" aria-disabled={busy ? 'true' : undefined} onClick={onLoad}>
+    // aria-disabled rather than disabled while a page loads, so the button keeps focus; aria-busy says that the press is working.
+    <button
+      ref={ref}
+      type="button"
+      class="feed__older"
+      aria-disabled={busy ? 'true' : undefined}
+      aria-busy={busy ? 'true' : undefined}
+      onClick={onLoad}
+    >
       {FEED_TEXT.loadOlder}
     </button>
   );
@@ -153,6 +173,8 @@ export function Feed({ snapshot, store, locale, timeZone }: FeedProps) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   // A ref as well as state: two presses before the next render must still send one request.
   const olderInFlight = useRef(false);
+  // What the last press that gave up at its bound looked through, and in which conversation (V5 finding 5).
+  const [lookedBack, setLookedBack] = useState<{ readonly key: string; readonly count: number } | null>(null);
 
   const dates = useMemo(() => createFeedDates(locale, timeZone), [locale, timeZone]);
   const conversation = snapshot.conversations.find((candidate) => candidate.id === snapshot.selectedConversation);
@@ -163,6 +185,12 @@ export function Feed({ snapshot, store, locale, timeZone }: FeedProps) {
     [snapshot.messages, snapshot.newMarkerBeforeId, me, kind, dates],
   );
   const key = `${snapshot.selectedRepo ?? ''}\n${snapshot.selectedConversation ?? ''}`;
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  // What a press found out is about the conversation it was made in: opening another takes it away for good.
+  useEffect(() => {
+    setLookedBack(null);
+  }, [key]);
 
   useLayoutEffect(() => {
     reading.update(key, snapshot.messages, me);
@@ -188,9 +216,15 @@ export function Feed({ snapshot, store, locale, timeZone }: FeedProps) {
     if (olderInFlight.current) return;
     olderInFlight.current = true;
     setLoadingOlder(true);
+    setLookedBack(null);
     reading.holdAnchor();
+    const pressedIn = key;
     storeRef.current
       .loadOlder()
+      .then((result) => {
+        // Said only where it was asked: the reader may have opened another conversation while the pages came.
+        if (result.lookedBack !== null && keyRef.current === pressedIn) setLookedBack({ key: pressedIn, count: result.lookedBack });
+      })
       .catch(() => undefined)
       .finally(() => {
         olderInFlight.current = false;
@@ -199,10 +233,21 @@ export function Feed({ snapshot, store, locale, timeZone }: FeedProps) {
   }
 
   const status = emptyText(snapshot, kind);
+  // A press in a DM may take several requests, so a screen reader is told; #chat's is one page and over before it could be read.
+  const looksFurther = loadingOlder && (kind === 'direct' || kind === 'observed');
+  const lookedBackText = lookedBack !== null && lookedBack.key === key ? FEED_TEXT.lookedBack(lookedBack.count) : '';
   return (
     <div class="feed">
       {snapshot.hasMore && snapshot.selectedConversation !== null && (
-        <OlderButton busy={loadingOlder} onLoad={loadOlder} onLeaveWithFocus={() => logRef.current?.focus({ preventScroll: true })} />
+        // The line sits beside the button and outside the log: a line appearing above the messages would move them,
+        // and the reading position (reading-position.ts) only puts the reader back when the first message changes.
+        // The status element is always there while the button is, so that a screen reader has the region before its text.
+        <div class="feed__older-bar">
+          <OlderButton busy={loadingOlder} onLoad={loadOlder} onLeaveWithFocus={() => logRef.current?.focus({ preventScroll: true })} />
+          <p class="feed__status feed__older-status" role="status">
+            {looksFurther ? <span class="visually-hidden">{FEED_TEXT.loadingOlder}</span> : lookedBackText}
+          </p>
+        </div>
       )}
       <div
         ref={logRef}

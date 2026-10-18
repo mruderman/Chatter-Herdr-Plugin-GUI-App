@@ -9,6 +9,7 @@ import { ERROR_CODES } from '../api/errors';
 import { parseDirectory, parseMe, parseMessagesPage, parseRepos } from '../api/guards';
 import { CHANNEL, type Directory, type Me, type Message, type SendResult } from '../api/types';
 import { body, recordedError } from '../../test/fixtures/recorded';
+import { NOT_LOOKED_BACK, OLDER_MAX_MESSAGES, OLDER_MAX_PAGES } from './repo-sync';
 import { REVOKED_SEND } from './revoked-send';
 import { announcementOf, makeNotice } from './send-notice';
 import type {
@@ -18,6 +19,7 @@ import type {
   ConversationId,
   ErrorInfo,
   IncomingMessage,
+  OlderResult,
   RepoChoice,
   SendDraft,
   SendNotice,
@@ -611,12 +613,32 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
 
     followRotation: (_handle, rotate) => rotate(),
 
+    // As the real store's press (repo-sync.ts loadOlder, whose bounds this takes): in a DM, page after page until a
+    // message of it is added, the history ends, or the bound is reached; #chat is the one page. A message found on the
+    // page that reaches the bound counts as found. The recordings are too small to reach the message bound, so only the
+    // page bound is run on both stores (conformance.test.ts); the message bound is run on the real one (load-older.test.ts).
     loadOlder() {
       const repo = current();
-      if (disposed || !repo || repo.loaded >= repo.messages.length) return Promise.resolve();
-      repo.loaded = Math.min(repo.messages.length, repo.loaded + pageSize);
+      if (disposed || !repo || repo.loaded >= repo.messages.length) return Promise.resolve(NOT_LOOKED_BACK);
+      const wanted = selectedConversation;
+      const seeking = wanted !== null && wanted !== CHANNEL ? wanted : null;
+      let pages = 0;
+      let loaded = 0;
+      let result: OlderResult = NOT_LOOKED_BACK;
+      for (;;) {
+        const before = repo.loaded;
+        repo.loaded = Math.min(repo.messages.length, repo.loaded + pageSize);
+        pages += 1;
+        loaded += repo.loaded - before;
+        const added = repo.messages.slice(repo.messages.length - repo.loaded, repo.messages.length - before);
+        if (seeking === null || repo.loaded >= repo.messages.length || added.some((message) => belongsTo(message, seeking))) break;
+        if (pages >= OLDER_MAX_PAGES || loaded >= OLDER_MAX_MESSAGES) {
+          result = Object.freeze({ lookedBack: loaded });
+          break;
+        }
+      }
       publish();
-      return Promise.resolve();
+      return Promise.resolve(result);
     },
 
     markRead() {

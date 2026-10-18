@@ -12,7 +12,7 @@ import { CHANNEL, type Directory, type Me, type Message, type Repo, type SendRes
 import { Announcer } from './announce';
 import { belongsTo, CHANNEL_CONVERSATION, conversationOf, dmId, ordered } from './conversations';
 import { classify, keepTrying, retryDelay, UNAUTHORIZED } from './failure';
-import { RepoSync, type SyncHost } from './repo-sync';
+import { NOT_LOOKED_BACK, RepoSync, type SyncHost } from './repo-sync';
 import { REVOKED_SEND } from './revoked-send';
 import { announcementOf, makeNotice } from './send-notice';
 import type {
@@ -879,8 +879,9 @@ export function createStore(options: StoreOptions = {}): Store {
     loadOlder() {
       const current = live;
       const repo = current ? selectedSync(current) : null;
-      if (disposed || !current || current.revoked || !repo) return Promise.resolve();
-      return repo.loadOlder();
+      if (disposed || !current || current.revoked || !repo) return Promise.resolve(NOT_LOOKED_BACK);
+      // A DM is looked for until a message of it comes (V5 finding 5); the repo itself does not know which one is shown.
+      return repo.loadOlder(current.selectedConversation);
     },
 
     markRead,

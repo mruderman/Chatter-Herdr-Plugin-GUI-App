@@ -108,7 +108,8 @@ export interface StoreSnapshot {
   readonly messages: readonly Message[];
   /**
    * Older messages may exist: "Load older messages" shows. The bridge pages over all of the
-   * member's messages in the repo, not per conversation, so a page may add nothing to this one.
+   * member's messages in the repo, not per conversation, so a page may add nothing to this one (a press in a DM
+   * therefore asks for more than one page: see `loadOlder`).
    */
   readonly hasMore: boolean;
   /**
@@ -138,6 +139,20 @@ export interface StoreSnapshot {
    * being the number of distinct conversations and n the number of messages.
    */
   readonly announcement: Announcement | null;
+}
+
+/**
+ * What one press of "Load older messages" left to say (V5 finding 5). The repo pages over everything the member may
+ * see, so in a DM one press keeps asking until a message of it was added, the history ends, or a bound is reached
+ * (10 pages or 1,000 messages); only the last of these is news for the reader.
+ */
+export interface OlderResult {
+  /**
+   * The number of messages the press loaded, whichever conversation they belong to, when it gave up at its bound
+   * with older pages left and no message of the selected DM added. Null in every other case: a message was found,
+   * the history ended, the conversation is #chat (one page per press), a request failed, or the session is over.
+   */
+  readonly lookedBack: number | null;
 }
 
 export interface SendDraft {
@@ -188,8 +203,14 @@ export interface Store {
    * no token to replace), are left alone: `rotate` just runs. A failure of `rotate` is passed on unchanged.
    */
   followRotation<T extends { readonly token: string }>(handle: string, rotate: () => Promise<T>): Promise<T>;
-  /** Loads the next older page of the selected repo. Does nothing when `hasMore` is false; overlapping calls share one request. */
-  loadOlder(): Promise<void>;
+  /**
+   * Loads the next older page of the selected repo; for a DM (direct or observed) as many pages as it takes to add a
+   * message of it, at most 10 pages or 1,000 messages (V5 finding 5), because the bridge pages over every conversation
+   * and a page may hold none of this one. Does nothing when `hasMore` is false; overlapping calls share one chain. A
+   * request that fails ends it without a word, with `hasMore` as the last page left it. Resolves with what the
+   * feed should tell the reader, if anything.
+   */
+  loadOlder(): Promise<OlderResult>;
   /** Moves the selected repo's read pointer forward to the newest message of the selected conversation. Never backward. */
   markRead(): Promise<void>;
   /**

@@ -590,7 +590,7 @@ describe.skipIf(!HAVE_CHATTER)('the conversation list against the real bridge an
    * conversation list. The api is wrapped to see that answer come back: a fixed pause could end before a slow
    * answer, and a third member whose list is checked before it would pass whatever the answer holds.
    */
-  async function realStore(who: PairMember): Promise<Store> {
+  async function realStore(who: PairMember, pageSize: number = PAIR_WORLD.pageSize): Promise<Store> {
     let asked = 0;
     let answered = false;
     const store = createStore({
@@ -609,7 +609,7 @@ describe.skipIf(!HAVE_CHATTER)('the conversation list against the real bridge an
         };
       },
       streamTiming: LIVE_TIMING,
-      pageSize: PAIR_WORLD.pageSize,
+      pageSize,
     });
     stores.push(store);
     await eventually(() => (store.getSnapshot().session.status === 'signed-out' ? true : undefined), 'the first /v1/me');
@@ -626,10 +626,10 @@ describe.skipIf(!HAVE_CHATTER)('the conversation list against the real bridge an
   }
 
   /** A store over the scripted bridge, signed in as `who` through the tailnet identity, on the parity repo. */
-  async function scriptedStore(who: PairMember): Promise<Store> {
+  async function scriptedStore(who: PairMember, pageSize: number = PAIR_WORLD.pageSize): Promise<Store> {
     const clock = new ManualClock();
     const bridge = scriptedBridge(who);
-    const store = createStore({ api: bridge.api, clock, random: () => 0.5, streamTiming: { deadAfterMs: 24 * 60 * 60_000 }, pageSize: PAIR_WORLD.pageSize });
+    const store = createStore({ api: bridge.api, clock, random: () => 0.5, streamTiming: { deadAfterMs: 24 * 60 * 60_000 }, pageSize });
     stores.push(store);
     for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
     store.selectRepo(env.key);
@@ -722,6 +722,52 @@ describe.skipIf(!HAVE_CHATTER)('the conversation list against the real bridge an
         expect(scripted.getSnapshot(), who).toMatchObject({ selectedConversation: dm.id, messages: [], hasMore: true });
       }
     }
+  }, SLOW);
+
+  // V5 finding 5. A press of "Load older messages" in a DM keeps asking until a message of the DM was added, the
+  // history ends, or a bound is reached; the real bridge's pages and the scripted bridge's, over the same rows, must
+  // leave the member with the same messages, hasMore and result. The DMs are all older than the newest page.
+  const openByLabel = (store: Store, label: string): void => {
+    const conversation = store.getSnapshot().conversations.find((c) => c.label === label);
+    if (!conversation) throw new Error(`no conversation "${label}"`);
+    store.selectConversation(conversation.id);
+  };
+  const shown = (store: Store): { readonly ids: number[]; readonly bodies: string[]; readonly hasMore: boolean } => {
+    const snapshot = store.getSnapshot();
+    return { ids: snapshot.messages.map((m) => m.id), bodies: snapshot.messages.map((m) => m.body), hasMore: snapshot.hasMore };
+  };
+
+  it('brings in an old DM with one press, alike in the real store over the real bridge and over the scripted one, for each DM of each member', async () => {
+    for (const who of PAIR_MEMBERS) {
+      const real = await realStore(who);
+      const scripted = await scriptedStore(who);
+      for (const label of PAIR_LABELS[who].slice(1)) {
+        const at = `${who}, ${label}`;
+        openByLabel(real, label);
+        openByLabel(scripted, label);
+        expect(shown(real).ids, `${at}: opens empty or short of its older messages`).toEqual(shown(scripted).ids);
+        const realResult = await real.loadOlder();
+        const scriptedResult = await scripted.loadOlder();
+        expect(realResult, at).toEqual(scriptedResult);
+        expect(shown(real), at).toEqual(shown(scripted));
+        expect(shown(real).ids.length, `${at}: one press left the DM with messages to show`).toBeGreaterThan(0);
+      }
+    }
+  }, SLOW);
+
+  it('gives up at 10 pages alike in both: pages of one put thom\'s DM with the agent 13 pages back, and the second press finds it', async () => {
+    const real = await realStore('thom', 1);
+    const scripted = await scriptedStore('thom', 1);
+    openByLabel(real, 'DM with codex-worker');
+    openByLabel(scripted, 'DM with codex-worker');
+    expect(await real.loadOlder()).toEqual({ lookedBack: 10 });
+    expect(await scripted.loadOlder()).toEqual({ lookedBack: 10 });
+    expect(shown(real).ids).toEqual([]);
+    expect(shown(scripted).ids).toEqual([]);
+    expect(await real.loadOlder()).toEqual({ lookedBack: null });
+    expect(await scripted.loadOlder()).toEqual({ lookedBack: null });
+    expect(shown(real).bodies).toEqual(['thom to the agent']);
+    expect(shown(real)).toEqual(shown(scripted));
   }, SLOW);
 
   it('shows a third member nobody else\'s pair: their list holds no handle of a DM they are not in, in the real store over the real bridge', async () => {

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from '../../../../test/render';
 import { ManualClock } from '../../../api/clock';
 import { createFakeStore, type FakeStore } from '../../../state/fake';
-import type { StoreSnapshot } from '../../../state/types';
+import type { OlderResult, StoreSnapshot } from '../../../state/types';
 import { setupUser } from '../../shell/test-utils';
 import { Feed } from './feed';
 import { Live, clockAfterRecordings, installFakeLayout, scrollLogTo, type FakeLayout } from './test-harness';
@@ -125,7 +125,7 @@ describe('the Messages log (ui-contract sections 3 and 8)', () => {
       const log = renderFeed(store);
       openDm(store, 'DM with mira');
       expect(log.textContent).toBe(OLDER_HINT);
-      while (store.getSnapshot().hasMore && store.getSnapshot().messages.length === 0) await act(() => store.loadOlder());
+      while (store.getSnapshot().hasMore && store.getSnapshot().messages.length === 0) await act(async () => { await store.loadOlder(); });
       expect(log.textContent).not.toContain('older than the ones loaded');
       expect(within(log).getAllByRole('article').length).toBeGreaterThan(0);
     });
@@ -406,8 +406,8 @@ describe('"Load older messages"', () => {
     let finish: () => void = () => undefined;
     const loadOlder = vi.spyOn(store, 'loadOlder').mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
+        new Promise<OlderResult>((resolve) => {
+          finish = () => resolve({ lookedBack: null });
         }),
     );
     renderFeed(store);
