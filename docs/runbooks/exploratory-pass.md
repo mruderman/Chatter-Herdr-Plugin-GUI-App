@@ -1,6 +1,6 @@
 # Exploratory GUI pass (V5 of the deploy-and-verify slice)
 
-> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`) and **finding 10 on 2026-10-16** (commit `99cc611`): their specs moved to `client/e2e/` and now guard the fixes. Finding 9 is in progress (its bridge route is merged; the client half is T19b). `npm run e2e:pending` fails the remaining ones, each for the reason it names. The text below is the pass as it was found.
+> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`) and **finding 10 on 2026-10-16** (commit `99cc611`): their specs moved to `client/e2e/` and now guard the fixes. **Finding 9 on 2026-10-18** (bridge route `5daccbe`, client `baa5277`). `npm run e2e:pending` fails the remaining ones (2, 3, 4, 5, 6 and 8), each for the reason it names. The text below is the pass as it was found.
 >
 > When another finding is fixed, move its spec into `client/e2e/` and change its harness imports from `../e2e/harness/` to `./harness/`.
 
@@ -165,7 +165,7 @@ edge and the trailing punctuation lands on the wrong end. `dir="auto"` on the bo
 Spec `explore-8-rtl-message-direction.spec.ts`: `distance of the Hebrew text from the right edge of its box (computed direction:
 ltr, from the left edge: 0 px) ... Expected: < 4  Received: 781`.
 
-**9. A DM older than the newest page has no entry in the list of conversations.** *Usability.*
+**9. A DM older than the newest page has no entry in the list of conversations.** *Usability.* **FIXED 2026-10-18 (`5daccbe`, `baa5277`).**
 Found by writing spec 5 (its first version timed out clicking a "DM with bob" button that was not on the page), then reproduced by
 spec 9 on a clean bridge; the pane could not make the situation, because every pair in the seeded world has a recent DM. The list is built from the messages loaded, which are the newest 100 of the repository; a member whose only exchange
 with someone is older has no "DM with X" button, and nothing hints that "Load older messages" in the channel would add one.
