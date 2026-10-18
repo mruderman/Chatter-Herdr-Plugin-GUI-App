@@ -347,7 +347,11 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
   function conversationsOf(repo: RepoState, member: Me): Conversation[] {
     const direct = new Map<ConversationId, Extract<Conversation, { kind: 'direct' }>>();
     const observed = new Map<ConversationId, Extract<Conversation, { kind: 'observed' }>>();
-    for (const message of loadedOf(repo)) {
+    // Every message the member may see, not only the loaded ones: the real store lists the pairs the bridge
+    // names (GET /conversations, bridge/src/messages.js listConversations), which are exactly the pairs of the
+    // rows this member can see, and a DM older than the newest page is one of them (V5 finding 9). This file
+    // keeps its own dmId and pairOf on purpose: conformance.test.ts then checks the real store's wording against them.
+    for (const message of repo.messages) {
       if (message.to === CHANNEL) continue;
       const id = dmId(message.from, message.to);
       if (message.from === member.handle || message.to === member.handle) {

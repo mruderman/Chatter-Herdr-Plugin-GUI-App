@@ -18,6 +18,8 @@ import {
   type BoardNote,
   type BoardTask,
   type Bye,
+  type ConversationPair,
+  type ConversationsResponse,
   type Directory,
   type DirectoryMember,
   type ErrorBody,
@@ -207,6 +209,21 @@ export function parseMessagesPage(value: unknown): MessagesPage {
     has_more: bool(o, 'has_more', ''),
     max_id: count(o, 'max_id', ''),
   };
+}
+
+const conversationPair: Item<ConversationPair> = (value, path) => {
+  const o = fields(value, path);
+  return {
+    a: string(o, 'a', path),
+    b: string(o, 'b', path),
+    last_id: count(o, 'last_id', path),
+    last_at: timestamp(o, 'last_at', path),
+  };
+};
+
+export function parseConversations(value: unknown): ConversationsResponse {
+  const o = fields(value, '');
+  return { repo: string(o, 'repo', ''), conversations: list(o, 'conversations', '', conversationPair) };
 }
 
 export function parseSendResult(value: unknown): SendResult {

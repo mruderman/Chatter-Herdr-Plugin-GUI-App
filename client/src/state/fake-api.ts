@@ -1,7 +1,7 @@
 // A scripted bridge for the real store's tests, answering through the same `Api` interface that
 // createApi implements (src/api/client.ts). Its database is the recordings in client/test/fixtures,
 // and it keeps the bridge's rules: who sees what (bridge/src/messages.js canSee), paging
-// (queryMessages), refusals in checkWrite's order with the bridge's texts (bridge/src/policy.js, kept in
+// (queryMessages), the conversation list (listConversations), refusals in checkWrite's order with the bridge's texts (bridge/src/policy.js, kept in
 // fake.ts and shared with the fake store, so there is one copy of those rules to check), a
 // read pointer that only moves forward (store.js setRead), and the stream's replay after
 // Last-Event-ID, then hello, then live rows (server.js openStream). Tests drive what a real bridge
@@ -14,6 +14,8 @@ import { parseDirectory, parseMe, parseMessagesPage, parseRepos } from '../api/g
 import { BYE_REASONS } from '../api/stream';
 import {
   CHANNEL,
+  type ConversationPair,
+  type ConversationsResponse,
   type Directory,
   type Me,
   type Message,
@@ -31,6 +33,7 @@ export const BRIDGE_ROUTES = {
   directory: 'directory',
   repos: 'repos',
   messages: 'messages',
+  conversations: 'conversations',
   send: 'send',
   read: 'read',
   stream: 'stream',
@@ -216,6 +219,10 @@ export class FakeBridge {
       messages: async (repo, query = {}, options) => {
         const member = await enter(BRIDGE_ROUTES.messages, signalOf(options), { repo, query });
         return this.page(member, repo, query);
+      },
+      conversations: async (repo, options) => {
+        const member = await enter(BRIDGE_ROUTES.conversations, signalOf(options), { repo });
+        return this.pairs(member, repo);
       },
       send: async (repo, draft, options) => {
         const member = await enter(BRIDGE_ROUTES.send, signalOf(options), { repo, draft: { to: draft.to, body: draft.body } });
@@ -455,6 +462,25 @@ export class FakeBridge {
       rows = older.slice(-limit);
     }
     return { repo, epoch: table.epoch, messages: rows.map((row) => ({ ...row, mentions: [...row.mentions] })), has_more: hasMore, max_id: table.maxId };
+  }
+
+  /**
+   * bridge/src/messages.js listConversations: per unordered pair of participants of the direct messages the
+   * member may see (canSee, which leaves out Chatter's mention copies and, for a member, other people's DMs),
+   * the newest one's id and time, newest first. `a` before `b` in plain string order (SQLite's min() and
+   * max() are byte order, which is the same for handles). No text.
+   */
+  private pairs(member: Me, repo: string): ConversationsResponse {
+    const table = this.table(repo);
+    const newest = new Map<string, ConversationPair>();
+    for (const row of table.rows) {
+      if (row.to === CHANNEL || !canSee(member, row)) continue;
+      const [a, b] = row.from <= row.to ? [row.from, row.to] : [row.to, row.from];
+      const key = JSON.stringify([a, b]);
+      const seen = newest.get(key);
+      if (!seen || row.id > seen.last_id) newest.set(key, { a, b, last_id: row.id, last_at: row.created_at });
+    }
+    return { repo, conversations: [...newest.values()].sort((x, y) => y.last_id - x.last_id) };
   }
 
   /** bridge/src/policy.js checkWrite (the rules are fake.ts's refuseWrite, on the directory served now), then the write. */

@@ -105,6 +105,29 @@ export interface MessagesQuery {
   readonly limit?: number;
 }
 
+/**
+ * One direct-message pair the caller may see. `a` and `b` are the two participants, `a` before `b` in byte
+ * order whichever way the messages went; `last_id` and `last_at` are the pair's newest visible message.
+ * Never message text: the list reveals nothing that paging /messages back would not.
+ */
+export interface ConversationPair {
+  readonly a: string;
+  readonly b: string;
+  readonly last_id: number;
+  readonly last_at: string;
+}
+
+/**
+ * GET /v1/repos/{key}/conversations (V5 finding 9): the pairs of the direct messages the caller may see, newest
+ * first, under the visibility of /messages (a member only the pairs they are in, the admin every pair). It exists
+ * because a list built from the loaded messages misses a DM that is older than the newest page. It carries no
+ * epoch: an answer belongs to the database that was current when it was asked.
+ */
+export interface ConversationsResponse {
+  readonly repo: string;
+  readonly conversations: readonly ConversationPair[];
+}
+
 /** POST /v1/repos/{key}/messages */
 export interface SendRequest {
   readonly to: string;

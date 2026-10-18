@@ -613,11 +613,88 @@ describe.each([
       const all = recordedPage('flan');
       const d = await make({ as: 'flan', pageSize: 4 });
       expect(d.now().hasMore).toBe(true);
-      expect(d.labels()).toEqual(['#chat', 'DM with codex']);
+      // The conversation list does not wait for the pages: the bridge lists every pair (V5 finding 9).
+      expect(d.labels()).toEqual(['#chat', 'DM with codex', 'DM codex to thom', 'DM grace to thom', 'DM mira to thom']);
       expect(d.now().messages.map((m) => m.id)).toEqual(all.slice(-4).filter((m) => m.to === CHANNEL).map((m) => m.id));
       while (d.now().hasMore) await d.store.loadOlder();
       expect(d.now().messages).toEqual(all.filter((m) => m.to === CHANNEL));
       expect(d.labels()).toHaveLength(5);
+    });
+
+    // V5 finding 9. The recorded page holds 13 rows a member may see; a page of two leaves every DM of thom's
+    // out of the loaded messages, and the conversation list must still have them, as the bridge's list does.
+    describe('a direct message conversation older than the newest page (the conversation list from the bridge)', () => {
+      it('is on the list from the start, with the id and the label of the loaded messages\' own conversation', async () => {
+        const d = await make({ pageSize: 2 });
+        expect(d.now().messages.map((m) => m.id)).toEqual([13, 14]);
+        expect(d.now().conversations).toEqual([
+          { kind: 'channel', id: CHANNEL, label: '#chat' },
+          { kind: 'direct', id: 'dm:["codex","thom"]', label: 'DM with codex', peer: 'codex' },
+          { kind: 'direct', id: 'dm:["grace","thom"]', label: 'DM with grace', peer: 'grace' },
+          { kind: 'direct', id: 'dm:["mira","thom"]', label: 'DM with mira', peer: 'mira' },
+        ]);
+        // Exactly what the same member's list is when every message is loaded.
+        expect((await make()).now().conversations).toEqual(d.now().conversations);
+      });
+
+      it('gives the admin every other pair too, observed and labelled by its two handles in alphabetical order, and his own as "DM with"', async () => {
+        const d = await make({ as: 'flan', pageSize: 2 });
+        expect(d.now().messages).toEqual([]);
+        expect(d.now().conversations).toEqual([
+          { kind: 'channel', id: CHANNEL, label: '#chat' },
+          { kind: 'direct', id: 'dm:["codex","flan"]', label: 'DM with codex', peer: 'codex' },
+          { kind: 'observed', id: 'dm:["codex","thom"]', label: 'DM codex to thom', from: 'codex', to: 'thom' },
+          { kind: 'observed', id: 'dm:["grace","thom"]', label: 'DM grace to thom', from: 'grace', to: 'thom' },
+          { kind: 'observed', id: 'dm:["mira","thom"]', label: 'DM mira to thom', from: 'mira', to: 'thom' },
+        ]);
+        expect((await make({ as: 'flan' })).now().conversations).toEqual(d.now().conversations);
+      });
+
+      it('lists a member whose pairs are all older than the page, and one with none, and shows neither the other\'s', async () => {
+        expect((await make({ as: 'mira', pageSize: 2 })).labels()).toEqual(['#chat', 'DM with thom']);
+        expect((await make({ as: 'kieran', pageSize: 2 })).labels()).toEqual(['#chat']);
+      });
+
+      it('opens empty, with older pages left, and shows its messages once they are paged in, oldest first', async () => {
+        const d = await make({ pageSize: 2 });
+        d.open('DM with mira');
+        expect(d.now()).toMatchObject({ selectedConversation: 'dm:["mira","thom"]', messages: [], hasMore: true, newMarkerBeforeId: null });
+        while (d.now().messages.length === 0 && d.now().hasMore) await d.store.loadOlder();
+        expect(d.now().messages.map((m) => [m.id, m.from, m.to])).toEqual([[4, 'thom', 'mira'], [5, 'mira', 'thom']]);
+      });
+
+      it('is one entry when a message of the pair arrives later, in either direction', async () => {
+        const d = await make({ pageSize: 2 });
+        await d.receive({ from: 'mira', to: 'thom', body: 'a new word in an old DM' });
+        expect(d.labels().filter((label) => label === 'DM with mira')).toHaveLength(1);
+        expect(d.labels()).toEqual(['#chat', 'DM with codex', 'DM with grace', 'DM with mira']);
+        d.open('DM with mira');
+        expect(d.now().messages.map((m) => m.body)).toEqual(['a new word in an old DM']);
+      });
+
+      it('is one entry when the member sends the next message of it', async () => {
+        const d = await make({ pageSize: 2 });
+        expect(await d.store.send({ to: 'mira', body: 'my turn' })).toBe(true);
+        expect(d.labels()).toEqual(['#chat', 'DM with codex', 'DM with grace', 'DM with mira']);
+        d.open('DM with mira');
+        expect(d.now().messages.map((m) => m.body)).toEqual(['my turn']);
+      });
+
+      it('is listed when the admin\'s page holds an observed pair\'s newest message in either direction, once', async () => {
+        const d = await make({ as: 'flan', pageSize: 2 });
+        await d.receive({ from: 'grace', to: 'thom', body: 'newer than anything loaded' });
+        await d.receive({ from: 'thom', to: 'grace', body: 'and the answer' });
+        expect(d.labels()).toEqual(['#chat', 'DM with codex', 'DM codex to thom', 'DM grace to thom', 'DM mira to thom']);
+      });
+
+      it('goes on being listed after sign-out and back in', async () => {
+        const d = await make({ pageSize: 2 });
+        d.store.signOut();
+        expect(d.labels()).toEqual([]);
+        expect(await d.store.signIn(d.token)).toBe(true);
+        await d.settle();
+        expect(d.labels()).toEqual(['#chat', 'DM with codex', 'DM with grace', 'DM with mira']);
+      });
     });
 
     it('puts the marker before the first message past the read pointer, and keeps it there', async () => {

@@ -7,7 +7,11 @@
 // back. Needs CHATTER_JS, like the bridge's contract tests; skipped without it, and skipped is not
 // passing.
 //
-// What is compared for each message and sender:
+// The last block (the conversation list, V5 finding 9) compares something else: the answer of the bridge's
+// GET /conversations with the scripted bridge's, given the same rows, and the conversations the real store
+// lists over each, including pairs older than the newest page and the admin's observed ones.
+//
+// What is compared for each message and sender in the first block:
 //   outcome  accepted or refused, and the code. The scripted bridge also gives the status; the fake
 //            store has none to show, because the store contract carries only the code and the words.
 //   words    the refusal's message, which is what the member reads.
@@ -27,12 +31,16 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createApi } from '../api/client';
+import { ManualClock } from '../api/clock';
 import { ApiError } from '../api/errors';
-import { parseDirectory, parseMe, parseSendResult } from '../api/guards';
+import { parseConversations, parseDirectory, parseMe, parseSendResult } from '../api/guards';
 import { CHANNEL, type Directory, type Me, type Message, type SendResult } from '../api/types';
 import { createFakeStore, type FakeMember } from './fake';
 import { FakeBridge, MAIN_REPO } from './fake-api';
 import { noticeLines, queuedText } from './send-notice';
+import { createStore } from './store';
+import type { Store, StoreSnapshot } from './types';
 
 const CHATTER_JS = process.env.CHATTER_JS ?? '';
 const HAVE_CHATTER = CHATTER_JS !== '' && existsSync(CHATTER_JS);
@@ -495,4 +503,239 @@ describe.skipIf(!HAVE_CHATTER)('the fakes against the real bridge and Chatter (n
   it('gives a reason for each case unmodelled in the notice', () => {
     for (const [key, why] of Object.entries(UNMODELLED_NOTICE)) expect(why.length, key).toBeGreaterThan(20);
   });
+});
+
+// V5 finding 9 (T19b). The real bridge and the scripted one are given the very same rows, those of a scratch
+// Chatter database read back after real sends, and must answer the conversation list alike for each member;
+// and the real store, over the real bridge and over the scripted one, must then list the same conversations.
+// Every DM is older than the newest page, which holds channel posts only: what the list shows of a pair is what
+// the bridge says, and never more. The world is the one the scripted bridge can sign in: flan the admin, thom,
+// mira and kieran, who is in no DM at all and is the third member whose view must hold nobody else's pair.
+const PAIR_WORLD = {
+  agent: 'codex-worker',
+  // thom and mira write in both directions (the second is newer); flan writes to mira, thom to the agent.
+  dms: [
+    { from: 'thom', to: 'mira', text: 'thom to mira, the first word' },
+    { from: 'mira', to: 'thom', text: 'mira to thom, the answer' },
+    { from: 'flan', to: 'mira', text: 'flan to mira' },
+    { from: 'thom', to: 'codex-worker', text: 'thom to the agent' },
+  ],
+  // A channel post that mentions the agent makes Chatter write a per-recipient copy: a row to the agent, never a pair.
+  mention: { from: 'thom', text: 'thom in the channel, @codex-worker look' },
+  posts: 12,
+  pageSize: 3,
+} as const;
+/** What each member's list must read: the bridge's pairs, as the member's own DMs or, for the admin, observed ones. */
+const PAIR_LABELS: Readonly<Record<'flan' | 'thom' | 'mira' | 'kieran', readonly string[]>> = {
+  flan: ['#chat', 'DM with mira', 'DM codex-worker to thom', 'DM mira to thom'],
+  thom: ['#chat', 'DM with codex-worker', 'DM with mira'],
+  mira: ['#chat', 'DM with flan', 'DM with thom'],
+  kieran: ['#chat'],
+};
+const PAIR_MEMBERS = ['flan', 'thom', 'mira', 'kieran'] as const;
+type PairMember = (typeof PAIR_MEMBERS)[number];
+// Quick reconnects for a test; the bridge pings every 1.5 s at pollMs 50, far inside the silence limit.
+const LIVE_TIMING = { baseDelayMs: 50, maxDelayMs: 200, deadAfterMs: 10_000 };
+
+interface WorldEnv extends Env {
+  readonly base: string;
+  readonly key: string;
+  readonly tokens: Readonly<Record<string, string>>;
+}
+
+interface Sqlite {
+  prepare(sql: string): { run(...values: string[]): unknown; all(...values: string[]): Array<Record<string, unknown>> };
+  close(): void;
+}
+type OpenSqlite = new (file: string, options?: { readOnly?: boolean }) => Sqlite;
+
+/** Resolves once `read` gives a value; polls, because the real store answers on real timers. */
+async function eventually<T>(read: () => T | undefined, what: string, ms = 10_000): Promise<T> {
+  const started = Date.now();
+  for (;;) {
+    const value = read();
+    if (value !== undefined) return value;
+    if (Date.now() - started > ms) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+const idsOf = (snapshot: StoreSnapshot): string[] => snapshot.conversations.map((c) => c.id);
+
+describe.skipIf(!HAVE_CHATTER)('the conversation list against the real bridge and Chatter (needs CHATTER_JS)', () => {
+  let env: WorldEnv;
+  let rows: Message[];
+  const stores: Store[] = [];
+
+  /** The scripted bridge holding exactly the rows of the real one's database. */
+  const scriptedBridge = (identity: PairMember): FakeBridge => {
+    const bridge = new FakeBridge({ identity });
+    bridge.addRepo({ key: env.key, label: 'parity', rows });
+    return bridge;
+  };
+
+  const realAnswer = async (who: PairMember): Promise<unknown> => {
+    const reply = await env.api(who, 'GET', `/v1/repos/${env.key}/conversations`);
+    expect(reply.status, `${who}: ${JSON.stringify(reply.body)}`).toBe(200);
+    return parseConversations(reply.body);
+  };
+
+  const scriptedAnswer = async (who: PairMember): Promise<unknown> => {
+    const bridge = scriptedBridge(who);
+    return bridge.api(() => null).conversations(env.key);
+  };
+
+  /**
+   * A store over the real bridge, signed in as `who`, judged only after the bridge has answered its request for the
+   * conversation list. The api is wrapped to see that answer come back: a fixed pause could end before a slow
+   * answer, and a third member whose list is checked before it would pass whatever the answer holds.
+   */
+  async function realStore(who: PairMember): Promise<Store> {
+    let asked = 0;
+    let answered = false;
+    const store = createStore({
+      api: (getToken) => {
+        const api = createApi({ baseUrl: env.base, getToken });
+        return {
+          ...api,
+          conversations: async (repo, options) => {
+            asked += 1;
+            try {
+              return await api.conversations(repo, options);
+            } finally {
+              answered = true;
+            }
+          },
+        };
+      },
+      streamTiming: LIVE_TIMING,
+      pageSize: PAIR_WORLD.pageSize,
+    });
+    stores.push(store);
+    await eventually(() => (store.getSnapshot().session.status === 'signed-out' ? true : undefined), 'the first /v1/me');
+    const token = env.tokens[who];
+    if (!token) throw new Error(`no token for ${who}`);
+    expect(await store.signIn(token)).toBe(true);
+    await eventually(() => (answered ? true : undefined), `the bridge's answer to ${who}'s conversation list`);
+    expect(asked, `${who}: the store asked for the conversation list`).toBeGreaterThanOrEqual(1);
+    // The answer is in; let the store merge it and publish.
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    const wanted = PAIR_LABELS[who].length;
+    await eventually(() => (store.getSnapshot().connection === 'online' && store.getSnapshot().conversations.length >= wanted ? true : undefined), `${who}'s list`);
+    return store;
+  }
+
+  /** A store over the scripted bridge, signed in as `who` through the tailnet identity, on the parity repo. */
+  async function scriptedStore(who: PairMember): Promise<Store> {
+    const clock = new ManualClock();
+    const bridge = scriptedBridge(who);
+    const store = createStore({ api: bridge.api, clock, random: () => 0.5, streamTiming: { deadAfterMs: 24 * 60 * 60_000 }, pageSize: PAIR_WORLD.pageSize });
+    stores.push(store);
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    store.selectRepo(env.key);
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    return store;
+  }
+
+  beforeAll(async () => {
+    const { makeEnv } = (await import(/* @vite-ignore */ new URL(HELPERS, import.meta.url).href)) as { makeEnv: (options?: { limits?: { maxBody: number; postsPerMinute: number } }) => Promise<WorldEnv> };
+    env = await makeEnv({ limits: { maxBody: 8_000, postsPerMinute: 10_000 } });
+    env.addMember('thom', { kind: 'computational', can_address_agents: true });
+    env.addMember('mira', { kind: 'human' });
+    env.addMember('kieran', { kind: 'computational', can_address_agents: false });
+    env.seedAgent(PAIR_WORLD.agent);
+    for (const dm of PAIR_WORLD.dms) {
+      const reply = await env.post(dm.from, dm.to, dm.text);
+      expect(reply.status, `${dm.from} to ${dm.to}: ${JSON.stringify(reply.body)}`).toBe(CREATED);
+    }
+    const mention = await env.post(PAIR_WORLD.mention.from, CHANNEL, PAIR_WORLD.mention.text);
+    expect(mention.status, JSON.stringify(mention.body)).toBe(CREATED);
+    // The posts that push every DM past the newest page, written to the scratch database as bridge/test/hardening.test.js does:
+    // sending them one by one would spend a Chatter run on each.
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: OpenSqlite };
+    const write = new DatabaseSync(path.join(env.repoInfo.dir, 'chatter.db'));
+    const stamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    for (let i = 1; i <= PAIR_WORLD.posts; i += 1) {
+      write.prepare('INSERT INTO messages (from_agent, to_agent, body, kind, created_at) VALUES (?, ?, ?, ?, ?)').run('mira', CHANNEL, `channel post ${i}`, 'post', stamp);
+    }
+    write.close();
+    const read = new DatabaseSync(path.join(env.repoInfo.dir, 'chatter.db'), { readOnly: true });
+    rows = read.prepare('SELECT id, from_agent, to_agent, body, kind, ref_id, created_at FROM messages ORDER BY id').all().map((r) => ({
+      id: Number(r['id']),
+      from: String(r['from_agent']),
+      to: String(r['to_agent']),
+      body: String(r['body']),
+      kind: String(r['kind']),
+      ref_id: r['ref_id'] === null ? null : String(r['ref_id']),
+      created_at: `${String(r['created_at']).replace(' ', 'T')}Z`,
+      mentions: [],
+      everyone: false,
+    }));
+    read.close();
+  }, SLOW);
+
+  afterAll(async () => {
+    // Before the bridge goes: its shutdown byes would start reconnects on real timers.
+    for (const store of stores) store.dispose();
+    await env?.stop();
+  });
+
+  it('holds what the comparisons rely on: every DM older than the newest page, and a mention copy that is no pair', () => {
+    const page = rows.slice(-PAIR_WORLD.pageSize);
+    expect(page.every((row) => row.to === CHANNEL)).toBe(true);
+    const direct = rows.filter((row) => row.to !== CHANNEL && row.kind !== 'mention');
+    expect(direct.map((row) => row.body)).toEqual(PAIR_WORLD.dms.map((dm) => dm.text));
+    expect(Math.max(...direct.map((row) => row.id))).toBeLessThan(page[0]?.id ?? 0);
+    const copies = rows.filter((row) => row.kind === 'mention');
+    expect(copies.map((row) => [row.from, row.to])).toEqual([['thom', PAIR_WORLD.agent]]);
+    // The copy is newer than thom's DM to the agent, so a list that counted it would end that pair at the copy.
+    expect(copies[0]?.id ?? 0).toBeGreaterThan(direct.at(-1)?.id ?? Number.POSITIVE_INFINITY);
+  });
+
+  it('has the scripted bridge answer the conversation list as the real bridge does, for the admin and for each member, to the byte', async () => {
+    for (const who of PAIR_MEMBERS) expect(await scriptedAnswer(who), who).toEqual(await realAnswer(who));
+  });
+
+  it('answers each member the pairs they are in and the admin all of them, newest first, and the third member nothing', async () => {
+    const pairs = async (who: PairMember): Promise<string[]> => ((await realAnswer(who)) as { conversations: Array<{ a: string; b: string }> }).conversations.map((c) => `${c.a}|${c.b}`);
+    expect(await pairs('flan')).toEqual(['codex-worker|thom', 'flan|mira', 'mira|thom']);
+    expect(await pairs('thom')).toEqual(['codex-worker|thom', 'mira|thom']);
+    expect(await pairs('mira')).toEqual(['flan|mira', 'mira|thom']);
+    expect(await pairs('kieran')).toEqual([]);
+  });
+
+  it('lists the same conversations in the real store over the real bridge as over the scripted one, for each member, though every DM is older than the page', async () => {
+    for (const who of PAIR_MEMBERS) {
+      const real = await realStore(who);
+      const scripted = await scriptedStore(who);
+      const wanted = PAIR_LABELS[who];
+      expect(real.getSnapshot().conversations.map((c) => c.label), `${who}, real bridge`).toEqual(wanted);
+      expect(scripted.getSnapshot().conversations.map((c) => c.label), `${who}, scripted bridge`).toEqual(wanted);
+      expect(real.getSnapshot().conversations, who).toEqual(scripted.getSnapshot().conversations);
+      expect(idsOf(real.getSnapshot()), who).toEqual(idsOf(scripted.getSnapshot()));
+      // Older than the page: the newest page held channel posts only, so each DM opens empty with pages left.
+      const dm = real.getSnapshot().conversations.find((c) => c.kind !== 'channel');
+      if (dm) {
+        real.selectConversation(dm.id);
+        scripted.selectConversation(dm.id);
+        expect(real.getSnapshot(), who).toMatchObject({ selectedConversation: dm.id, messages: [], hasMore: true });
+        expect(scripted.getSnapshot(), who).toMatchObject({ selectedConversation: dm.id, messages: [], hasMore: true });
+      }
+    }
+  }, SLOW);
+
+  it('shows a third member nobody else\'s pair: their list holds no handle of a DM they are not in, in the real store over the real bridge', async () => {
+    const kieran = await realStore('kieran');
+    const shown = JSON.stringify(kieran.getSnapshot().conversations);
+    for (const handle of ['thom', 'mira', 'flan', PAIR_WORLD.agent]) expect(shown.includes(handle), `${handle} in ${shown}`).toBe(false);
+    expect(kieran.getSnapshot().conversations.map((c) => c.label)).toEqual(['#chat']);
+    // Nor in what he can load: paging all the way back brings in no DM message.
+    while (kieran.getSnapshot().hasMore) await kieran.loadOlder();
+    expect(kieran.getSnapshot().conversations.map((c) => c.label)).toEqual(['#chat']);
+    // An ordinary member sees their own pairs and not the others': thom has none with flan, kieran or mira's with flan.
+    const thom = await realStore('thom');
+    const thomShown = JSON.stringify(thom.getSnapshot().conversations);
+    expect(thomShown.includes('flan')).toBe(false);
+    expect(thomShown.includes('kieran')).toBe(false);
+  }, SLOW);
 });

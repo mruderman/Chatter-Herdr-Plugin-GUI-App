@@ -6,7 +6,7 @@ import type { Clock } from '../api/clock';
 import { connectStream, type StreamHandle, type StreamStatus, type StreamTiming } from '../api/stream';
 import { CHANNEL, type Me, type Message, type MessagesPage } from '../api/types';
 import { CACHE_LIMIT, merge, newest } from './cache';
-import { conversationOf } from './conversations';
+import { conversationOf, conversationOfPair } from './conversations';
 import { classify, keepTrying, retryDelay } from './failure';
 import type { Conversation, ConversationId, ErrorInfo } from './types';
 
@@ -80,6 +80,7 @@ export class RepoSync {
   private run = 0;
   private stopped = false;
   private older: Promise<void> | null = null;
+  private listing: Promise<void> | null = null;
   private readonly waiters = new Set<Waiter>();
 
   constructor(private readonly host: SyncHost, private readonly member: Me, key: string, readPointer: number) {
@@ -127,6 +128,41 @@ export class RepoSync {
       }
     })();
     return this.older;
+  }
+
+  /**
+   * Asks the bridge which DM pairs the member may see (GET /conversations) and adds each to `known`, so that a
+   * DM older than the newest page has a button (V5 finding 9). An entry is the same conversation a message of
+   * its pair gives (conversationOfPair), so nothing is listed twice and a pair already known is left alone.
+   * Overlapping calls share one request. Never rejects and never says it failed: the list then stays what the
+   * loaded messages give, and nothing asks again by itself. A 401 is treated as `loadOlder` and `catchUp` treat
+   * it: the member's streams and newest page decide about dead credentials, this optional read does not.
+   */
+  loadConversations(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (this.listing) return this.listing;
+    const run = this.run;
+    this.listing = (async () => {
+      try {
+        const { conversations } = await this.host.api.conversations(this.key, { signal: this.host.signal });
+        // The answer carries no epoch, so a replaced database is told by the run: an answer from before it is another's.
+        if (run !== this.run) return;
+        let added = false;
+        for (const pair of conversations) {
+          const conversation = conversationOfPair(pair.a, pair.b, this.member);
+          if (this.known.has(conversation.id)) continue;
+          this.known.set(conversation.id, Object.freeze(conversation));
+          added = true;
+        }
+        if (added) this.host.changed();
+      } catch (failure) {
+        const read = classify(failure, this.host.signal);
+        if (read.kind === 'bug') this.host.report(read.error);
+      } finally {
+        if (run === this.run) this.listing = null;
+      }
+    })();
+    return this.listing;
   }
 
   /** Resolves true once a message matching `match` is held, false after `ms` or when the repo stops. */
@@ -280,6 +316,8 @@ export class RepoSync {
     this.failures = 0;
     this.phase = 'loading';
     this.host.changed();
+    // The pairs of the old database went with it; the new one's are asked for beside its newest page.
+    void this.loadConversations();
     const run = this.run;
     void this.host.refetchRepos(this)
       .then(() => {
@@ -294,6 +332,7 @@ export class RepoSync {
     this.retry?.();
     this.retry = null;
     this.older = null;
+    this.listing = null;
   }
 
   /**

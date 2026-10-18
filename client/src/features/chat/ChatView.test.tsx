@@ -79,13 +79,26 @@ describe('the Chat view (ui-contract sections 2, 3 and 5)', () => {
 
   it('puts "Load older messages" between the conversations and the feed when there is more', async () => {
     const user = setupUser();
-    // Only the newest five messages are loaded, all in #chat, so "#chat" is the only conversation yet.
+    // Only the newest five messages are loaded, all in #chat, but the bridge lists the member's three DMs too
+    // (V5 finding 9), so the button follows the last of the conversations.
     renderChat(createFakeStore({ as: 'thom', pageSize: 5 }));
-    screen.getByRole('button', { name: '#chat' }).focus();
+    screen.getByRole('button', { name: 'DM with mira' }).focus();
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Load older messages' }));
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole('log', { name: 'Messages' }));
+  });
+
+  it('lists a DM older than the newest page and, opened, says in the feed what to press, with that button there to press', async () => {
+    const user = setupUser();
+    renderChat(createFakeStore({ as: 'thom', pageSize: 2 }));
+    await user.click(screen.getByRole('button', { name: 'DM with mira' }));
+    expect(screen.getByRole('button', { name: 'DM with mira' }).getAttribute('aria-current')).toBe('true');
+    expect(screen.getByRole('log', { name: 'Messages' }).textContent).toBe('Its messages are older than the ones loaded. Press Load older messages to bring them in.');
+    // The recording holds 13 rows thom may see and the DM is rows 4 and 5, so four pages of two bring it in.
+    for (let page = 0; page < 4; page += 1) await user.click(screen.getByRole('button', { name: 'Load older messages' }));
+    expect(screen.getByRole('log', { name: 'Messages' }).textContent).not.toContain('older than the ones loaded');
+    expect(screen.getAllByRole('article').length).toBeGreaterThan(0);
   });
 
   it('carries the Announcements region', () => {
@@ -112,6 +125,12 @@ describe('every state: the rules that hold everywhere', () => {
       const store = createFakeStore({ as: 'flan' });
       const observed = store.getSnapshot().conversations.find((conversation) => conversation.label === 'DM grace to thom');
       store.selectConversation(observed?.id ?? '');
+      renderChat(store);
+    }],
+    ['a DM none of whose messages is loaded, with its hint', () => {
+      const store = createFakeStore({ as: 'thom', pageSize: 2 });
+      const dm = store.getSnapshot().conversations.find((conversation) => conversation.label === 'DM with mira');
+      store.selectConversation(dm?.id ?? '');
       renderChat(store);
     }],
     ['an empty conversation', () => renderChat(createFakeStore({ as: 'kieran' }), { messages: [], newMarkerBeforeId: null })],

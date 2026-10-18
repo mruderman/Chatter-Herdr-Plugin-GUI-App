@@ -8,6 +8,7 @@ import {
   parseAddMemberResult,
   parseAudit,
   parseBoard,
+  parseConversations,
   parseDirectory,
   parseErrorBody,
   parseHealth,
@@ -187,5 +188,60 @@ describe('guards on damaged answers', () => {
     expect(refusedField(parseMessagesPage, 'not an object')).toBe('body');
     expect(refusedField(parseMessagesPage, [])).toBe('body');
     expect(refusedField(parseMessagesPage, null)).toBe('body');
+  });
+});
+
+// GET /v1/repos/{key}/conversations (SPEC section 5, V5 finding 9). No recording holds it (the recorder is
+// not part of this slice), so the answers are written out here, in the shape bridge/test/conversations.test.js pins.
+describe('parseConversations', () => {
+  const entry = (a: string, b: string, last_id: number, last_at = '2026-10-10T14:06:56Z'): Record<string, unknown> => ({ a, b, last_id, last_at });
+  const answer = (...conversations: Array<Record<string, unknown>>): Record<string, unknown> => ({ repo: 'repo-c522d9cf', conversations });
+
+  it('reads the answer into exactly the typed fields, in the order the bridge gave them', () => {
+    const read = parseConversations(answer(entry('codex', 'thom', 8), entry('grace', 'thom', 6, '2026-10-10T14:06:55Z')));
+    expect(read).toEqual({
+      repo: 'repo-c522d9cf',
+      conversations: [
+        { a: 'codex', b: 'thom', last_id: 8, last_at: '2026-10-10T14:06:56Z' },
+        { a: 'grace', b: 'thom', last_id: 6, last_at: '2026-10-10T14:06:55Z' },
+      ],
+    });
+  });
+
+  it('reads an empty list: a repo with no direct messages, or a member with none', () => {
+    expect(parseConversations(answer())).toEqual({ repo: 'repo-c522d9cf', conversations: [] });
+  });
+
+  it('ignores fields it does not know, at the top and in an entry, and returns fresh objects', () => {
+    const wire: Record<string, unknown> = { ...answer({ ...entry('a', 'b', 3), text: 'a private word', epoch: 'x' }), epoch: 'e', extra: [1] };
+    const read = parseConversations(wire);
+    expect(Object.keys(read).sort()).toEqual(['conversations', 'repo']);
+    expect(Object.keys(read.conversations[0] ?? {}).sort()).toEqual(['a', 'b', 'last_at', 'last_id']);
+    expect(read.conversations[0]).not.toBe((wire['conversations'] as unknown[])[0]);
+  });
+
+  // [what is damaged, the answer, the field the error must name]
+  const damage: ReadonlyArray<readonly [string, unknown, string]> = [
+    ['a body that is not an object', 'not an object', 'body'],
+    ['a body that is an array', [], 'body'],
+    ['a missing repo', { conversations: [] }, 'repo'],
+    ['a repo that is not a string', { repo: 7, conversations: [] }, 'repo'],
+    ['a missing list', { repo: 'r' }, 'conversations'],
+    ['a list that is not an array', { repo: 'r', conversations: {} }, 'conversations'],
+    ['an entry that is not an object', answer(entry('a', 'b', 1), 'a,b' as unknown as Record<string, unknown>), 'conversations[1]'],
+    ['a missing handle a', answer({ b: 'b', last_id: 1, last_at: '2026-10-10T14:06:56Z' }), 'conversations[0].a'],
+    ['a handle b that is a number', answer({ ...entry('a', 'b', 1), b: 5 }), 'conversations[0].b'],
+    ['a null handle', answer({ ...entry('a', 'b', 1), a: null }), 'conversations[0].a'],
+    ['a missing last_id', answer({ a: 'a', b: 'b', last_at: '2026-10-10T14:06:56Z' }), 'conversations[0].last_id'],
+    ['a last_id that is a string', answer({ ...entry('a', 'b', 1), last_id: '1' }), 'conversations[0].last_id'],
+    ['a fractional last_id', answer({ ...entry('a', 'b', 1), last_id: 1.5 }), 'conversations[0].last_id'],
+    ['a negative last_id', answer({ ...entry('a', 'b', 1), last_id: -1 }), 'conversations[0].last_id'],
+    ['a missing last_at', answer({ a: 'a', b: 'b', last_id: 1 }), 'conversations[0].last_at'],
+    ['a last_at without a zone', answer(entry('a', 'b', 1, '2026-10-10 14:06:56')), 'conversations[0].last_at'],
+    ['a last_at that is null', answer({ ...entry('a', 'b', 1), last_at: null }), 'conversations[0].last_at'],
+  ];
+
+  it.each(damage)('refuses %s, naming the field', (_what, value, field) => {
+    expect(refusedField(parseConversations, value)).toBe(field);
   });
 });

@@ -118,6 +118,72 @@ describe('createApi: what each method sends and returns', () => {
   });
 });
 
+// GET /v1/repos/{key}/conversations has no recording (the recorder is not part of T19b), so the answer is made here.
+describe('createApi: conversations', () => {
+  const PAIRS = { repo: KEY, conversations: [{ a: 'codex', b: 'thom', last_id: 8, last_at: '2026-10-10T14:06:56Z' }] };
+
+  function answering(status: number, json: unknown): { fetch: FetchLike; sent: Sent[] } {
+    const sent: Sent[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      sent.push({ url, method: init.method ?? 'GET', headers: new Headers(init.headers), body: typeof init.body === 'string' ? init.body : null });
+      return new Response(JSON.stringify(json), { status, headers: { 'content-type': 'application/json' } });
+    };
+    return { fetch, sent };
+  }
+
+  it('asks GET /v1/repos/{key}/conversations with the bearer token and no body, and returns the parsed answer', async () => {
+    const { fetch, sent } = answering(200, PAIRS);
+    const result = await apiFor(fetch).conversations(KEY);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.method).toBe('GET');
+    expect(sent[0]?.url).toBe(`/v1/repos/${KEY}/conversations`);
+    expect(sent[0]?.headers.get('accept')).toBe('application/json');
+    expect(sent[0]?.headers.get('authorization')).toBe(`Bearer ${TOKEN}`);
+    expect(sent[0]?.body).toBeNull();
+    expect(result).toEqual(PAIRS);
+  });
+
+  it('sends no Authorization without a token, so the tailnet identity can apply, and keeps the key out of the query', async () => {
+    const { fetch, sent } = answering(200, PAIRS);
+    await apiFor(fetch, null).conversations(KEY);
+    expect(sent[0]?.headers.get('authorization')).toBeNull();
+    expect(sent[0]?.url).not.toContain('?');
+  });
+
+  it('encodes the key as one path segment and refuses one the URL parser would resolve away, before any request', async () => {
+    const { fetch, sent } = answering(200, PAIRS);
+    await createApi({ baseUrl: 'http://127.0.0.1:8791', getToken: () => null, fetch }).conversations('a/b c');
+    expect(sent[0]?.url).toBe('http://127.0.0.1:8791/v1/repos/a%2Fb%20c/conversations');
+    await expect(apiFor(fetch).conversations('..')).rejects.toThrow(TypeError);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('turns a refusal into an ApiError with the bridge\'s code, and a 401 into one with status 401', async () => {
+    const { status, code, message } = recordedError('me-bad-token');
+    const { fetch } = answering(status, { error: { code, message } });
+    const error = await failure(apiFor(fetch).conversations(KEY));
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 401, code: ERROR_CODES.badToken, message });
+  });
+
+  it('reports a 2xx answer in the wrong shape as a ProtocolError naming the field', async () => {
+    const { fetch } = answering(200, { repo: KEY, conversations: [{ a: 'codex', b: 'thom', last_id: '8', last_at: '2026-10-10T14:06:56Z' }] });
+    const error = await failure(apiFor(fetch).conversations(KEY));
+    expect(error).toBeInstanceOf(ProtocolError);
+    expect(error).toMatchObject({ field: 'conversations[0].last_id' });
+  });
+
+  it('passes the caller\'s own abort through as an abort', async () => {
+    const controller = new AbortController();
+    const fetch: FetchLike = (_url, init) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+    const pending = failure(apiFor(fetch).conversations(KEY, { signal: controller.signal }));
+    controller.abort();
+    expect(await pending).toMatchObject({ name: 'AbortError' });
+  });
+});
+
 describe('createApi: credentials', () => {
   it('sends the token as a bearer header and never in the URL', async () => {
     const { fetch, sent } = replaying('me-admin');

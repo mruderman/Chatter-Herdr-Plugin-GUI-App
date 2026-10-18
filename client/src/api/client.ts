@@ -6,6 +6,7 @@ import {
   parseAddMemberResult,
   parseAudit,
   parseBoard,
+  parseConversations,
   parseDirectory,
   parseErrorBody,
   parseHealth,
@@ -25,6 +26,7 @@ import type {
   AuditQuery,
   AuditResponse,
   Board,
+  ConversationsResponse,
   Directory,
   Health,
   Me,
@@ -70,6 +72,8 @@ export interface Api {
   directory(options?: RequestOptions): Promise<Directory>;
   repos(options?: RequestOptions): Promise<ReposResponse>;
   messages(repo: string, query?: MessagesQuery, options?: RequestOptions): Promise<MessagesPage>;
+  /** The direct-message pairs the caller may see, however old (types.ts, ConversationsResponse). */
+  conversations(repo: string, options?: RequestOptions): Promise<ConversationsResponse>;
   send(repo: string, message: SendRequest, options?: RequestOptions): Promise<SendResult>;
   board(repo: string, options?: RequestOptions): Promise<Board>;
   markRead(repo: string, upToId: number, options?: RequestOptions): Promise<ReadResult>;
@@ -191,6 +195,7 @@ export function createApi(options: ApiOptions): Api {
       parseMessagesPage,
       o,
     ),
+    conversations: async (repo, o) => get(ROUTES.conversations(repo), parseConversations, o),
     send: async (repo, message, o) => call(METHODS.post, ROUTES.messages(repo), parseSendResult, { to: message.to, body: message.body }, o?.signal),
     board: async (repo, o) => get(ROUTES.board(repo), parseBoard, o),
     markRead: async (repo, upToId, o) => call(METHODS.post, ROUTES.read(repo), parseReadResult, { up_to_id: nonNegativeInteger(upToId, 'up_to_id') }, o?.signal),

@@ -21,6 +21,7 @@ export const ROUTES = {
   members: `${V1}/members`,
   audit: `${V1}/audit`,
   messages: (key: string): string => `${repoPath(key)}/messages`,
+  conversations: (key: string): string => `${repoPath(key)}/conversations`,
   stream: (key: string): string => `${repoPath(key)}/stream`,
   board: (key: string): string => `${repoPath(key)}/board`,
   read: (key: string): string => `${repoPath(key)}/read`,

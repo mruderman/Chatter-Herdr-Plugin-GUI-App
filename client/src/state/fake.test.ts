@@ -484,11 +484,28 @@ describe('fake store: repos, paging and the new marker', () => {
     const all = recordedPage('flan');
     const f = fake({ as: 'flan', pageSize: 4 });
     expect(f.now().hasMore).toBe(true);
-    expect(f.labels()).toEqual(['#chat', 'DM with codex']);
+    // The list does not wait for the pages: the bridge lists every pair the member may see (V5 finding 9).
+    expect(f.labels()).toEqual(['#chat', 'DM with codex', 'DM codex to thom', 'DM grace to thom', 'DM mira to thom']);
     expect(f.now().messages.map((m) => m.id)).toEqual(all.slice(-4).filter((m) => m.to === CHANNEL).map((m) => m.id));
     while (f.now().hasMore) await f.store.loadOlder();
     expect(f.now().messages).toEqual(all.filter((m) => m.to === CHANNEL));
     expect(f.labels()).toHaveLength(5);
+  });
+
+  it('lists a DM conversation older than the newest page and opens it empty, with older pages left (V5 finding 9)', () => {
+    const f = fake({ as: 'thom', pageSize: 2 });
+    expect(f.now().messages.map((m) => m.id)).toEqual([13, 14]);
+    expect(f.labels()).toEqual(['#chat', 'DM with codex', 'DM with grace', 'DM with mira']);
+    f.open('DM with mira');
+    expect(f.now()).toMatchObject({ selectedConversation: 'dm:["mira","thom"]', messages: [], hasMore: true });
+  });
+
+  it('lists the pairs of the member\'s own view only: a pair the recording holds for others is not listed to a member', () => {
+    for (const as of ['mira', 'kieran'] as const) {
+      const labels = fake({ as, pageSize: 2 }).labels().join('|');
+      expect(labels.includes('grace'), as).toBe(false);
+      expect(labels.includes('codex'), as).toBe(false);
+    }
   });
 
   it('puts the marker before the first message past the read pointer, and keeps it there', async () => {

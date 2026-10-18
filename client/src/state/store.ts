@@ -453,6 +453,10 @@ export function createStore(options: StoreOptions = {}): Store {
     current.selection += 1;
     announcer.drop();
     ensureSync(current, repo);
+    // A DM older than the newest page has no message to make a button of: the bridge's list of pairs does (V5
+    // finding 9). Asked each time a repo is selected, and again by the repo itself after an epoch change. A
+    // stopped repo (revoked, signed out) asks nothing.
+    void current.repos.get(repo.key)?.loadConversations();
     // A repo outside the background set is followed only while it is selected.
     if (previous !== null && previous !== repo.key && !current.background.has(previous)) {
       current.repos.get(previous)?.stop();

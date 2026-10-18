@@ -2,7 +2,7 @@
 // day headings, the "New messages" separator, and one article per message. Bodies are plain text: each
 // is one text node, so nothing in a message can become markup, a link or an image.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { Store, StoreSnapshot } from '../../../state/types';
+import type { Conversation, Store, StoreSnapshot } from '../../../state/types';
 import { SKIP_TARGET } from '../../shell';
 import { MESSAGE_LABEL, createFeedDates, feedItems, type FeedItem, type MessageLabel } from './feed-items';
 import { MESSAGE_ID_ATTRIBUTE, ReadingPosition } from './reading-position';
@@ -18,6 +18,12 @@ export const FEED_TEXT = {
   empty: 'No messages in this conversation yet.',
   /** Empty, but the bridge has older pages: they may hold some. */
   emptyRecent: 'No recent messages in this conversation.',
+  /**
+   * A DM the bridge lists (or one the cache let go) with none of its messages loaded, and older pages left. Said
+   * instead of `emptyRecent`, which does not tell the reader what to do: the pair is there, its messages are older
+   * than the newest page, and the "Load older messages" button above the log brings them in (V5 finding 9).
+   */
+  olderUnloaded: 'Its messages are older than the ones loaded. Press Load older messages to bring them in.',
 } as const;
 
 // The labels' tones only repeat what their words say.
@@ -36,11 +42,13 @@ export interface FeedProps {
   readonly timeZone?: string;
 }
 
-function emptyText(snapshot: StoreSnapshot): string | null {
+function emptyText(snapshot: StoreSnapshot, kind: Conversation['kind'] | null): string | null {
   if (snapshot.selectedConversation === null) return FEED_TEXT.noConversation;
   if (snapshot.messages.length > 0) return null;
   if (snapshot.connection === 'syncing') return FEED_TEXT.loading;
-  return snapshot.hasMore ? FEED_TEXT.emptyRecent : FEED_TEXT.empty;
+  if (!snapshot.hasMore) return FEED_TEXT.empty;
+  // #chat keeps its words: only a DM can be listed without a message of it loaded.
+  return kind === 'direct' || kind === 'observed' ? FEED_TEXT.olderUnloaded : FEED_TEXT.emptyRecent;
 }
 
 function MessageEntry({ item }: { item: Extract<FeedItem, { type: 'message' }> }) {
@@ -187,7 +195,7 @@ export function Feed({ snapshot, store, locale, timeZone }: FeedProps) {
       });
   }
 
-  const status = emptyText(snapshot);
+  const status = emptyText(snapshot, kind);
   return (
     <div class="feed">
       {snapshot.hasMore && snapshot.selectedConversation !== null && (

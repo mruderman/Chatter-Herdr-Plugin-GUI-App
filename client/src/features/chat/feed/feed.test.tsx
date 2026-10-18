@@ -95,6 +95,61 @@ describe('the Messages log (ui-contract sections 3 and 8)', () => {
     render(<Feed snapshot={{ ...store.getSnapshot(), messages: [], newMarkerBeforeId: null, ...overrides }} store={store} />);
     expect(screen.getByRole('log', { name: 'Messages' }).textContent).toBe(text);
   });
+
+  // V5 finding 9: a conversation the bridge lists whose messages are all older than the newest page. The feed has
+  // nothing to show, and "No recent messages" does not tell the reader what to do about it.
+  describe('a direct message conversation none of whose messages is loaded', () => {
+    const OLDER_HINT = 'Its messages are older than the ones loaded. Press Load older messages to bring them in.';
+    const openDm = (store: FakeStore, label: string): void => {
+      const conversation = store.getSnapshot().conversations.find((c) => c.label === label);
+      if (!conversation) throw new Error(`no conversation "${label}"`);
+      act(() => store.selectConversation(conversation.id));
+    };
+
+    it.each([
+      ['a member\'s own DM', 'thom', 'DM with mira'],
+      ['an admin\'s observed pair', 'flan', 'DM mira to thom'],
+    ] as const)('tells the reader to press "Load older messages", in the feed\'s own status line: %s', (_what, as, label) => {
+      const store = createFakeStore({ as, pageSize: 2 });
+      const log = renderFeed(store);
+      openDm(store, label);
+      expect(within(log).queryAllByRole('article')).toEqual([]);
+      expect(log.textContent).toBe(OLDER_HINT);
+      const status = log.querySelector('.feed__status');
+      expect(status?.textContent).toBe(OLDER_HINT);
+      expect(status?.tagName).toBe('P');
+    });
+
+    it('goes when the messages are paged in', async () => {
+      const store = createFakeStore({ as: 'thom', pageSize: 5 });
+      const log = renderFeed(store);
+      openDm(store, 'DM with mira');
+      expect(log.textContent).toBe(OLDER_HINT);
+      while (store.getSnapshot().hasMore && store.getSnapshot().messages.length === 0) await act(() => store.loadOlder());
+      expect(log.textContent).not.toContain('older than the ones loaded');
+      expect(within(log).getAllByRole('article').length).toBeGreaterThan(0);
+    });
+
+    it('is not said when nothing older exists: the conversation is simply empty', () => {
+      const store = createFakeStore({ as: 'thom', pageSize: 2 });
+      openDm(store, 'DM with mira');
+      render(<Feed snapshot={{ ...store.getSnapshot(), hasMore: false }} store={store} />);
+      expect(screen.getByRole('log', { name: 'Messages' }).textContent).toBe('No messages in this conversation yet.');
+    });
+
+    it('is not said while the repo loads, and #chat keeps its own words', () => {
+      const store = createFakeStore({ as: 'thom', pageSize: 2 });
+      openDm(store, 'DM with mira');
+      render(<Feed snapshot={{ ...store.getSnapshot(), connection: 'syncing' }} store={store} />);
+      expect(screen.getByRole('log', { name: 'Messages' }).textContent).toBe('Loading messages.');
+    });
+
+    it('does not replace the words of an empty #chat with older pages left', () => {
+      const store = createFakeStore({ as: 'thom' });
+      render(<Feed snapshot={{ ...store.getSnapshot(), messages: [], newMarkerBeforeId: null, hasMore: true }} store={store} />);
+      expect(screen.getByRole('log', { name: 'Messages' }).textContent).toBe('No recent messages in this conversation.');
+    });
+  });
 });
 
 describe('groups: one header for consecutive messages from one sender within 5 minutes', () => {

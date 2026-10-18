@@ -54,7 +54,11 @@ export type ConversationId = string;
  *             covers both directions, so `from` and `to` are the pair's two handles in
  *             alphabetical order (plain string comparison, as `[a, b].sort()` does, never a locale
  *             order) and imply no direction: the first handle did not necessarily write first.
- * A DM conversation appears when a message of it is loaded or arrives, or the member sends one.
+ * A DM conversation appears when a message of it is loaded or arrives, the member sends one, or the bridge lists
+ * its pair (GET /v1/repos/{key}/conversations, asked when a repo is selected and after an epoch change), which
+ * is how a DM older than the newest page gets its button (V5 finding 9). Such an entry may have no message
+ * loaded; its messages come with "Load older messages". The store lists only what the bridge listed or a
+ * message the bridge returned showed.
  */
 export type Conversation =
   | { readonly kind: 'channel'; readonly id: ConversationId; readonly label: string }

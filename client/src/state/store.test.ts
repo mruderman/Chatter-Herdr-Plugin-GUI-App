@@ -10,7 +10,7 @@ import { ApiError, CLIENT_ERROR_CODES, ERROR_CODES, NetworkError, ProtocolError 
 import { parseDirectory, parseMessagesPage } from '../api/guards';
 import { QUERY, ROUTES } from '../api/routes';
 import type { StreamTiming } from '../api/stream';
-import { CHANNEL, type Directory, type Message, type ReadResult } from '../api/types';
+import { CHANNEL, type ConversationPair, type ConversationsResponse, type Directory, type Message, type ReadResult } from '../api/types';
 import type { FakeMember } from './fake';
 import { BRIDGE_ROUTES, FakeBridge, MAIN_REPO, SITE_REPO } from './fake-api';
 import { createStore } from './store';
@@ -131,6 +131,38 @@ function steerRead(options: { readonly honourAbort?: boolean } = {}) {
           signal?.addEventListener('abort', () => reject(aborted()), { once: true });
         });
       },
+    }),
+  };
+}
+
+interface HeldConversations {
+  readonly repo: string;
+  readonly answer: (pairs: ConversationPair[]) => void;
+  readonly fail: (error: unknown) => void;
+}
+
+/**
+ * Takes conversations() over from the first call: every request is held, out of the scripted bridge's
+ * sight, until the test answers or fails it with the pairs it chooses. With `honourAbort` false a held
+ * request ignores the session's signal, which is how an answer already on its way when the session ended
+ * (or that a stack delivers late) reaches the store.
+ */
+function steerConversations(options: { readonly honourAbort?: boolean } = {}) {
+  const asked: HeldConversations[] = [];
+  const honour = options.honourAbort ?? true;
+  const aborted = (): DOMException => new DOMException('The operation was aborted.', 'AbortError');
+  return {
+    asked,
+    wrap: (inner: Api): Api => ({
+      ...inner,
+      conversations: (repo, requestOptions) =>
+        new Promise<ConversationsResponse>((resolve, reject) => {
+          asked.push({ repo, answer: (conversations) => resolve({ repo, conversations }), fail: reject });
+          if (!honour) return;
+          const signal = requestOptions?.signal;
+          if (signal?.aborted) reject(aborted());
+          signal?.addEventListener('abort', () => reject(aborted()), { once: true });
+        }),
     }),
   };
 }
@@ -598,6 +630,221 @@ describe('messages', () => {
     expect(h.now().messages).toHaveLength(1_100);
     expect(h.now().messages[0]?.body).toBe('bulk 0');
     expect(h.now().hasMore).toBe(true);
+  });
+});
+
+// V5 finding 9: the list was built from the loaded messages alone, so a DM older than the newest page had no
+// button. The store now also asks GET /v1/repos/{key}/conversations (a read-only list of the pairs the bridge
+// says the member may see) when a repo is selected and after each epoch change, and the pairs become entries of
+// the same list. Whatever the bridge does not list stays unlisted: the store makes no pair up.
+describe('the conversation list', () => {
+  const asks = (h: Awaited<ReturnType<typeof harness>>, repo?: string): number => h.bridge.count(BRIDGE_ROUTES.conversations, repo);
+  const THOM_PAIRS = ['DM with codex', 'DM with grace', 'DM with mira'];
+  const dm = (peer: string) => ({ kind: 'direct', id: `dm:${JSON.stringify([peer, 'thom'].sort())}`, label: `DM with ${peer}`, peer });
+  const observed = (from: string, to: string) => ({ kind: 'observed', id: `dm:${JSON.stringify([from, to])}`, label: `DM ${from} to ${to}`, from, to });
+
+  it('lists the pairs the bridge lists, older than the newest page or not, once each, as the member\'s own DMs', async () => {
+    // The newest page holds the last two rows, both #chat posts: no DM message is loaded at all.
+    const h = await harness({ pageSize: 2 });
+    expect(h.now().messages.map((m) => m.id)).toEqual([13, 14]);
+    expect(h.now().conversations).toEqual([{ kind: 'channel', id: CHANNEL, label: CHANNEL }, dm('codex'), dm('grace'), dm('mira')]);
+    expect(h.bridge.requests.filter((r) => r.route === BRIDGE_ROUTES.conversations)).toEqual([{ route: BRIDGE_ROUTES.conversations, repo: MAIN_REPO, withToken: false }]);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('lists the admin\'s own DMs, and every other pair as an observed conversation labelled by its two handles in alphabetical order', async () => {
+    const h = await harness({ as: 'flan', pageSize: 2 });
+    // Only flan's DMs to codex (15, 16) are on the newest page.
+    expect(h.now().messages).toEqual([]);
+    expect(h.now().conversations).toEqual([
+      { kind: 'channel', id: CHANNEL, label: CHANNEL },
+      { kind: 'direct', id: 'dm:["codex","flan"]', label: 'DM with codex', peer: 'codex' },
+      observed('codex', 'thom'),
+      observed('grace', 'thom'),
+      observed('mira', 'thom'),
+    ]);
+  });
+
+  it('gives the same id and label as the messages of the pair give, so that nothing is listed twice, whichever answer comes first', async () => {
+    const early = await harness({ before: (bridge) => bridge.hold(BRIDGE_ROUTES.messages) });
+    expect(early.now().conversations.map((c) => c.label)).toEqual(['#chat', ...THOM_PAIRS]);
+    early.bridge.release(BRIDGE_ROUTES.messages);
+    await settle();
+    const late = await harness({ before: (bridge) => bridge.hold(BRIDGE_ROUTES.conversations) });
+    expect(late.now().conversations.map((c) => c.label)).toEqual(['#chat', ...THOM_PAIRS]);
+    late.bridge.release(BRIDGE_ROUTES.conversations);
+    await settle();
+    for (const h of [early, late]) {
+      expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', ...THOM_PAIRS]);
+      expect(new Set(h.now().conversations.map((c) => c.id)).size).toBe(4);
+      expect(asks(h)).toBe(1);
+    }
+    expect(early.now().conversations).toEqual(late.now().conversations);
+  });
+
+  it('adds no entry for a DM that arrives later for a pair the route already listed', async () => {
+    const h = await harness({ pageSize: 2 });
+    await h.advance(1_000);
+    const arrived = h.bridge.write({ from: 'mira', to: 'thom', body: 'a new word in an old DM' });
+    await settle();
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', ...THOM_PAIRS]);
+    h.open('DM with mira');
+    expect(h.now().messages).toEqual([arrived]);
+    // And a DM to someone the route did not list is still added by its own message, as before.
+    h.bridge.write({ from: 'kieran', to: 'thom', body: 'a first word' });
+    await settle();
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', 'DM with codex', 'DM with grace', 'DM with kieran', 'DM with mira']);
+  });
+
+  it('opens an entry none of whose messages is loaded as an empty conversation, with older pages left, and pages its messages in', async () => {
+    const h = await harness({ pageSize: 2 });
+    h.open('DM with mira');
+    expect(h.now()).toMatchObject({ selectedConversation: 'dm:["mira","thom"]', messages: [], hasMore: true, newMarkerBeforeId: null });
+    let pages = 0;
+    while (h.now().messages.length === 0 && h.now().hasMore && pages < 10) {
+      await h.store.loadOlder();
+      pages += 1;
+    }
+    expect(h.now().messages.map((m) => m.id)).toEqual([4, 5]);
+    expect(pages).toBe(4);
+  });
+
+  it.each([
+    ['an unreachable bridge', new NetworkError('could not reach the bridge')],
+    ['a server error', new ApiError(500, 'internal', 'the bridge failed')],
+    ['a refusal', new ApiError(404, ERROR_CODES.noSuchRepo, 'no such repo')],
+    ['an answer in the wrong shape', new ProtocolError('conversations', 'is not an array')],
+  ])('leaves the list as the loaded messages give it after %s, shows no error, and does not ask again', async (_what, error) => {
+    // The last six rows hold one DM message (8, thom to codex); the route would have added grace and mira.
+    const h = await harness({ pageSize: 6, before: (bridge) => bridge.failNext(BRIDGE_ROUTES.conversations, error) });
+    expect(asks(h)).toBe(1);
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', 'DM with codex']);
+    expect(h.now()).toMatchObject({ session: { status: 'signed-in' }, connection: 'online', sendError: null });
+    await h.advance(TEN_MINUTES);
+    expect(asks(h)).toBe(1);
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', 'DM with codex']);
+    expect(h.errors).toEqual([]);
+    expect(h.now().session.status).toBe('signed-in');
+  });
+
+  it('treats a 401 from the route as the other optional calls do: nothing is shown or reported, the session stays, and the streams decide about the credentials', async () => {
+    const h = await harness({ pageSize: 6, before: (bridge) => bridge.failNext(BRIDGE_ROUTES.conversations, apiError('me-bad-token')) });
+    expect(asks(h)).toBe(1);
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', 'DM with codex']);
+    expect(h.now()).toMatchObject({ session: { status: 'signed-in' }, connection: 'online', sendError: null });
+    expect(h.bridge.openStreams()).toBe(2);
+    await h.advance(TEN_MINUTES);
+    expect(asks(h)).toBe(1);
+    expect(h.errors).toEqual([]);
+    expect(h.now().session.status).toBe('signed-in');
+  });
+
+  it('still ends the session when the credentials really are dead: the stream says so, whatever the route answered', async () => {
+    const h = await harness({ start: 'signed-out', before: (bridge) => bridge.failNext(BRIDGE_ROUTES.conversations, apiError('me-bad-token')) });
+    expect(await h.store.signIn(h.bridge.tokenOf('thom'))).toBe(true);
+    await settle();
+    expect(asks(h)).toBe(1);
+    expect(h.now().session.status).toBe('signed-in');
+    h.bridge.rotate('thom');
+    await settle();
+    await h.advance(500);
+    expect(h.now().session).toEqual({ status: 'signed-out', error: refusal('me-bad-token') });
+    expect(h.errors).toEqual([]);
+  });
+
+  it('asks again when a repo is selected, and only for the repo selected', async () => {
+    const h = await harness();
+    expect([asks(h, MAIN_REPO), asks(h, SITE_REPO)]).toEqual([1, 0]);
+    h.store.selectRepo(SITE_REPO);
+    await settle();
+    expect([asks(h, MAIN_REPO), asks(h, SITE_REPO)]).toEqual([1, 1]);
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat']);
+    h.store.selectRepo(MAIN_REPO);
+    await settle();
+    expect([asks(h, MAIN_REPO), asks(h, SITE_REPO)]).toEqual([2, 1]);
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', ...THOM_PAIRS]);
+    h.store.selectRepo(MAIN_REPO);
+    expect(asks(h, MAIN_REPO)).toBe(2);
+  });
+
+  it('asks again after an epoch change: the old database\'s pairs go, the new one\'s older than the page come', async () => {
+    const h = await harness({ pageSize: 2 });
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', ...THOM_PAIRS]);
+    h.bridge.purge(MAIN_REPO);
+    // The new database: one DM, then two posts that make it older than the newest page of two.
+    h.bridge.write({ from: 'mira', to: 'thom', body: 'the first row of a new database' });
+    h.bridge.write({ from: 'mira', body: 'then a post' });
+    h.bridge.write({ from: 'grace', body: 'and another' });
+    await settle();
+    expect(asks(h, MAIN_REPO)).toBe(2);
+    expect(h.now().messages.map((m) => m.id)).toEqual([2, 3]);
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', 'DM with mira']);
+    expect(h.now().hasMore).toBe(true);
+  });
+
+  it('drops an answer that was asked of the old database: it is not merged into the new one', async () => {
+    const steer = steerConversations();
+    const h = await harness({ pageSize: 2, wrap: steer.wrap });
+    expect(steer.asked.map((r) => r.repo)).toEqual([MAIN_REPO]);
+    h.bridge.purge(MAIN_REPO);
+    await settle();
+    expect(steer.asked.map((r) => r.repo)).toEqual([MAIN_REPO, MAIN_REPO]);
+    steer.asked[0]?.answer([{ a: 'mira', b: 'thom', last_id: 5, last_at: '2026-10-10T14:06:56Z' }]);
+    await settle();
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat']);
+    steer.asked[1]?.answer([{ a: 'grace', b: 'thom', last_id: 1, last_at: '2026-10-10T14:07:00Z' }]);
+    await settle();
+    expect(h.now().conversations.map((c) => c.label)).toEqual(['#chat', 'DM with grace']);
+  });
+
+  it('shares one request among overlapping asks for one repo, and asks again once it is answered', async () => {
+    const steer = steerConversations();
+    const h = await harness({ wrap: steer.wrap });
+    h.store.selectRepo(SITE_REPO);
+    h.store.selectRepo(MAIN_REPO);
+    await settle();
+    // MAIN_REPO's first request is still out: the second selection joins it.
+    expect(steer.asked.map((r) => r.repo)).toEqual([MAIN_REPO, SITE_REPO]);
+    steer.asked[0]?.answer([]);
+    await settle();
+    h.store.selectRepo(SITE_REPO);
+    h.store.selectRepo(MAIN_REPO);
+    await settle();
+    expect(steer.asked.map((r) => r.repo)).toEqual([MAIN_REPO, SITE_REPO, MAIN_REPO]);
+  });
+
+  it('shows what an answer brings only while the session lasts: after sign-out nothing is published and nothing fails', async () => {
+    const steer = steerConversations({ honourAbort: false });
+    const h = await harness({ wrap: steer.wrap });
+    expect(steer.asked.map((r) => r.repo)).toEqual([MAIN_REPO]);
+    h.store.signOut();
+    await settle();
+    const published = h.snapshots.length;
+    steer.asked[0]?.answer([{ a: 'mira', b: 'thom', last_id: 5, last_at: '2026-10-10T14:06:56Z' }]);
+    await settle();
+    expect(h.snapshots).toHaveLength(published);
+    expect(h.now().conversations).toEqual([]);
+    expect(h.errors).toEqual([]);
+    expect(h.clock.scheduled).toBe(0);
+  });
+
+  it('asks nothing once the member is revoked, whatever is selected afterwards', async () => {
+    const h = await harness();
+    expect(asks(h)).toBe(1);
+    h.bridge.revoke('thom');
+    await settle();
+    h.store.selectRepo(SITE_REPO);
+    h.store.selectRepo(MAIN_REPO);
+    await h.advance(TEN_MINUTES);
+    expect(asks(h)).toBe(1);
+    expect(h.now().connection).toBe('revoked');
+  });
+
+  it('leaves no timer behind: the route is asked once, with no retry loop', async () => {
+    const h = await harness({ before: (bridge) => bridge.failNext(BRIDGE_ROUTES.conversations, new NetworkError('could not reach the bridge')) });
+    expect(asks(h)).toBe(1);
+    // The timers within a minute: none is for the route (healthy, quiet streams keep nothing that soon).
+    expect(h.clock.delays.filter((delay) => delay <= 60_000)).toEqual([]);
   });
 });
 

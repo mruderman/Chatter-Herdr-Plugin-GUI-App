@@ -27,16 +27,25 @@ export function belongsTo(message: Message, id: ConversationId): boolean {
   return id === CHANNEL ? message.to === CHANNEL : message.to !== CHANNEL && dmId(message.from, message.to) === id;
 }
 
+/**
+ * The DM conversation of two handles, seen from the member's side, whichever order they come in. The one
+ * place that words it: a message of the pair (conversationOf) and an entry of the bridge's conversation list
+ * (GET /v1/repos/{key}/conversations) must give the same id, label and kind, or one DM would be two buttons.
+ */
+export function conversationOfPair(a: string, b: string, member: Me): Direct | Observed {
+  const id = dmId(a, b);
+  if (a === member.handle || b === member.handle) {
+    const peer = a === member.handle ? b : a;
+    return { kind: 'direct', id, label: `DM with ${peer}`, peer };
+  }
+  const [from, to] = pairOf(a, b);
+  return { kind: 'observed', id, label: `DM ${from} to ${to}`, from, to };
+}
+
 /** The conversation a message belongs to, seen from the member's side. */
 export function conversationOf(message: Message, member: Me): Conversation {
   if (message.to === CHANNEL) return CHANNEL_CONVERSATION;
-  const id = dmId(message.from, message.to);
-  if (message.from === member.handle || message.to === member.handle) {
-    const peer = message.from === member.handle ? message.to : message.from;
-    return { kind: 'direct', id, label: `DM with ${peer}`, peer };
-  }
-  const [from, to] = pairOf(message.from, message.to);
-  return { kind: 'observed', id, label: `DM ${from} to ${to}`, from, to };
+  return conversationOfPair(message.from, message.to, member);
 }
 
 /**
