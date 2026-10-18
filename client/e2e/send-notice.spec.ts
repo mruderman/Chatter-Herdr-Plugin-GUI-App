@@ -78,8 +78,9 @@ test('send notice: a mention of an agent that no session took says the same, onc
     expect(probe.status).toBe(CREATED);
     expect((probe.body as { pushed: string[] }).pushed, 'the bridge says the push was queued').toEqual([`${AGENT} (queued)`]);
 
-    // Not ending in the mention: while the suggestions for "@codex" are open under the caret, a click on Send
-    // collapses the list on mousedown and the button moves away before the mouse is released.
+    // Not ending in the mention: a habit from when a click on Send was lost while the suggestions for "@codex" were
+    // open (the list collapsed on mousedown and the button moved away before the mouse was released). T21 fixed that
+    // (composer-compact.spec.ts, "T21 (e)"); this spec is about the notice, so it keeps the list out of the way.
     await send(page, `@${AGENT} are you there?`);
     await expect(notice(page)).toContainText(NOT_DELIVERED);
     await expect(notice(page).getByRole('listitem')).toHaveCount(1);
@@ -178,8 +179,9 @@ test('send notice: at 1280 x 720 the notice is scrolled into view, with the newe
     await expect(notice(page)).toContainText(NO_AGENT);
     await expect(notice(page)).toContainText(NOT_DELIVERED);
 
-    // The composer is the bottom of the page and the log is at its floor on a window this high, so the notice
-    // under Send starts below the fold: the composer scrolls the page just far enough to show it.
+    // The composer is the bottom of the page and the notice sits under Send: the composer scrolls the page just far
+    // enough to show it, and does not move it when it already fits (since T21 the composer is about 155 px tall, so
+    // at this height the log keeps room, takes the notice's height from it, and the page may not move at all).
     await expect(notice(page), 'the notice is on screen').toBeInViewport({ ratio: 1 });
     await expect(dismiss(page), 'its button is too').toBeInViewport({ ratio: 1 });
     await expect(ui.messageBox(page)).toBeInViewport({ ratio: 1 });

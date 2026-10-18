@@ -4,6 +4,13 @@
  * the flow under the message box, so it never covers the field that has focus. No state is told by colour
  * alone: the active suggestion is bold with a bar, the read-only notice has a dashed border and says
  * what it is, and an over-long draft is described in words.
+ *
+ * Below 48rem the form is one column: "To", the message box with its hint, Send, then whatever is said
+ * about a send. From 48rem up (where the conversation list also moves beside the feed) "To", the message
+ * box and Send are one row and the hint and the count are under it, so the composer is about 155 px tall
+ * instead of 287 and what appears under Send is nearer the window. The markup is the same in both, so the
+ * reading and tab order are too: the two fields give their children to the form's grid (`display:
+ * contents`) and each child is placed by number. Nothing has a height of its own.
  */
 
 .composer {
@@ -31,6 +38,17 @@
 
 .composer__count {
   font-weight: 700;
+}
+
+/*
+ * What the bridge refused ("Not sent: ..."): the words say what it is, the 8 px bar and the border come from
+ * .alert and the tint is a second cue. It gets what the notice below gets: the room the composer keeps under
+ * it when it scrolls the page to it, and no margin of its own (the form's spacing and padding are the room
+ * around it).
+ */
+.composer .composer__alert {
+  margin: 0;
+  scroll-margin-block-end: var(--space-5);
 }
 
 .composer__actions {
@@ -132,5 +150,85 @@
     border-inline-start-color: HighlightText;
     background: Highlight;
     color: HighlightText;
+  }
+}
+
+/*
+ * The one row. The grid has no gap between rows, only between columns, because a row with nothing in it (the
+ * suggestions, the count, the alert) would still take its gap: each piece keeps its own space with a margin.
+ * The first column is the width of the longest recipient up to 10rem, and never more than 28% of the form
+ * (rem scales with the text size, the form does not), so that at 200% text the message box keeps the room to
+ * write in; Send takes what it needs. Send is level with the bottom of the box when the box grows with its text
+ * and "To" with its top.
+ */
+@media (min-width: 48rem) {
+  .composer {
+    grid-template-columns: minmax(6rem, min(10rem, 28%)) minmax(0, 1fr) auto;
+    gap: 0 var(--space-3);
+  }
+
+  .composer .composer__to,
+  .composer .composer__message {
+    display: contents;
+  }
+
+  .composer__to-label {
+    grid-row: 1;
+    grid-column: 1;
+    margin-block-end: var(--space-1);
+  }
+
+  .composer__message-label {
+    grid-row: 1;
+    grid-column: 2;
+    margin-block-end: var(--space-1);
+  }
+
+  .composer__to-select {
+    grid-row: 2;
+    grid-column: 1;
+    align-self: start;
+    inline-size: 100%;
+  }
+
+  .composer__input {
+    grid-row: 2;
+    grid-column: 2;
+  }
+
+  .composer__actions {
+    grid-row: 2;
+    grid-column: 3;
+    align-self: end;
+  }
+
+  .composer .mention-list {
+    grid-row: 3;
+    grid-column: 2;
+    margin-block-start: var(--space-1);
+  }
+
+  .composer .composer__hint {
+    grid-row: 4;
+    grid-column: 1 / -1;
+    margin-block-start: var(--space-2);
+  }
+
+  .composer .composer__count {
+    grid-row: 5;
+    grid-column: 1 / -1;
+    margin-block-start: var(--space-1);
+  }
+
+  .composer .composer__alert {
+    grid-row: 6;
+    grid-column: 1 / -1;
+    margin-block-start: var(--space-3);
+  }
+
+  .composer .composer__notice {
+    grid-row: 7;
+    grid-column: 1 / -1;
+    margin-block-start: var(--space-3);
   }
 }

@@ -164,7 +164,8 @@ test('explore 7 guard: at 200% text on a 1280 x 720 window the floor wins, nothi
 
 // The log is a flexible box, so what the composer gains the log loses. A reader at the newest message must not be
 // left with it cut off at the bottom of a shorter log (no scroll event fires when a box only changes size). It takes
-// a window with room to spare: at 1280 x 720 the log is within a few pixels of its floor and has nothing to lose.
+// a window with room to spare: before T21's compact composer the log at 1280 x 720 was within a few pixels of its
+// floor and had nothing to lose (it now has some, and the roomy window is kept as it was).
 const REPLY_LINES = 8;
 const ROOMY = FITTING[2]!;
 

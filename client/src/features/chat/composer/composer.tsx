@@ -5,7 +5,8 @@
 // `sendError`, in the bridge's own words, with the draft still in the box. A send the bridge accepted can
 // still carry something the sender should know (a mention that reaches nobody, a message that no live
 // session took): the store hands it over as `sendNotice`, shown here as plain text until the member sends
-// again, opens another conversation, or dismisses it. It never takes focus when it appears.
+// again, opens another conversation, or dismisses it. Neither takes focus when it appears, and both are
+// brought into the window when it is too short to show them (revealBelowSend).
 import type { TargetedInputEvent, TargetedKeyboardEvent, TargetedSubmitEvent } from 'preact';
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
 import { CHANNEL, type Store, type StoreSnapshot } from '../../../state/types';
@@ -66,15 +67,16 @@ function suggestionAt(field: HTMLTextAreaElement, dismissed: boolean): Suggestin
 }
 
 /**
- * Scrolls the page just far enough to bring the end of `notice` into the window, at once (never an
- * animation), and never so far that `box`, which has focus, would leave it at the top: where the composer is
- * taller than the window (a phone, 200% text) part of the notice stays below and the box stays in view.
- * The room kept under the notice is its `scroll-margin-block-end`. Does nothing when it is already in view.
+ * Scrolls the page just far enough to bring the end of `shown` (what the composer says under Send: the "Send
+ * error" alert or the send notice) into the window, at once (never an animation), and never so far that `box`,
+ * which has focus, would leave it at the top: where the composer is taller than the window (a phone, 200% text)
+ * part of it stays below and the box stays in view. The room kept under it is its `scroll-margin-block-end`.
+ * Does nothing when it is already in view.
  */
-function revealNotice(notice: HTMLElement, box: HTMLElement | null): void {
+function revealBelowSend(shown: HTMLElement, box: HTMLElement | null): void {
   const room = document.documentElement.clientHeight;
-  const margin = Number.parseFloat(getComputedStyle(notice).scrollMarginBlockEnd) || 0;
-  const hidden = notice.getBoundingClientRect().bottom + margin - room;
+  const margin = Number.parseFloat(getComputedStyle(shown).scrollMarginBlockEnd) || 0;
+  const hidden = shown.getBoundingClientRect().bottom + margin - room;
   if (hidden <= 0) return;
   const spare = box ? Math.max(0, box.getBoundingClientRect().top) : hidden;
   window.scrollBy({ top: Math.min(hidden, spare), behavior: 'instant' });
@@ -89,6 +91,7 @@ function remainderAfterSend(current: string, sent: string): string {
 export function Composer({ snapshot, store }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
+  const alertRef = useRef<HTMLParagraphElement>(null);
   const toId = useId();
   const listId = useId();
   const hintId = useId();
@@ -161,13 +164,21 @@ export function Composer({ snapshot, store }: ComposerProps) {
     store.selectConversation(dm.id);
   }, [snapshot.conversations, store]);
 
-  // The composer is the last thing on the page and the notice sits under Send, so on a window of ordinary
-  // height it can start below the fold, where nobody would see it. See revealNotice; focus stays where it is.
+  // The composer is the last thing on the page and the notice and the alert sit under Send, so on a window of
+  // short height they can start below the fold, where nobody would see them. See revealBelowSend; focus stays
+  // where it is. The alert's sequence is the number of failures, which is also its key: a repeated failure is a
+  // new element (announced again) and is brought into view again.
   const noticeSeq = notice?.seq ?? null;
   useEffect(() => {
     const shown = noticeRef.current;
-    if (noticeSeq !== null && shown) revealNotice(shown, textareaRef.current);
+    if (noticeSeq !== null && shown) revealBelowSend(shown, textareaRef.current);
   }, [noticeSeq]);
+
+  const alertSeq = sendError ? failures : null;
+  useEffect(() => {
+    const shown = alertRef.current;
+    if (alertSeq !== null && shown) revealBelowSend(shown, textareaRef.current);
+  }, [alertSeq]);
 
   const activeOption = list ? optionId(list.active) : null;
   useEffect(() => {
@@ -318,8 +329,16 @@ export function Composer({ snapshot, store }: ComposerProps) {
   return (
     <form class="composer" aria-label={COMPOSER_TEXT.form} onSubmit={onSubmit}>
       <div class="field composer__to">
-        <label for={toId}>{COMPOSER_TEXT.to}</label>
-        <select id={toId} value={recipient ?? ''} disabled={!usable} onChange={(event) => chooseRecipient(event.currentTarget.value)}>
+        <label class="composer__to-label" for={toId}>
+          {COMPOSER_TEXT.to}
+        </label>
+        <select
+          id={toId}
+          class="composer__to-select"
+          value={recipient ?? ''}
+          disabled={!usable}
+          onChange={(event) => chooseRecipient(event.currentTarget.value)}
+        >
           {recipientOptions(me, snapshot.directory, recipient).map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -327,8 +346,10 @@ export function Composer({ snapshot, store }: ComposerProps) {
           ))}
         </select>
       </div>
-      <div class="field">
-        <label for={SKIP_TARGET.composer}>{COMPOSER_TEXT.message}</label>
+      <div class="field composer__message">
+        <label class="composer__message-label" for={SKIP_TARGET.composer}>
+          {COMPOSER_TEXT.message}
+        </label>
         {/* The combobox role only while the list shows: axe 4.13 allows no role on a textarea, so a permanent one fails it. */}
         <textarea
           ref={textareaRef}
@@ -365,7 +386,7 @@ export function Composer({ snapshot, store }: ComposerProps) {
             ))}
           </ul>
         )}
-        <p id={hintId} class="field__hint">
+        <p id={hintId} class="field__hint composer__hint">
           {COMPOSER_TEXT.hint}
         </p>
         {tooLong && (
@@ -375,12 +396,21 @@ export function Composer({ snapshot, store }: ComposerProps) {
         )}
       </div>
       <div class="composer__actions">
-        <button type="submit" class="button--primary" disabled={!usable} aria-disabled={pending ? 'true' : undefined}>
+        {/* mousedown would take focus out of the message box, which closes the suggestions, and the log grows into the
+            room they took: Send moves from under the pointer before the button comes up and the click is lost. The
+            click still lands, and onSubmit puts focus in the box. Tab and a screen reader's activation are unaffected. */}
+        <button
+          type="submit"
+          class="button--primary"
+          disabled={!usable}
+          aria-disabled={pending ? 'true' : undefined}
+          onMouseDown={(event) => event.preventDefault()}
+        >
           {COMPOSER_TEXT.send}
         </button>
       </div>
       {sendError && (
-        <p key={failures} id={alertId} role="alert" aria-label={COMPOSER_TEXT.sendError} class="alert tone-danger">
+        <p key={failures} ref={alertRef} id={alertId} role="alert" aria-label={COMPOSER_TEXT.sendError} class="alert tone-danger composer__alert">
           {`${COMPOSER_TEXT.sendErrorPrefix}${sendError.message}`}
         </p>
       )}

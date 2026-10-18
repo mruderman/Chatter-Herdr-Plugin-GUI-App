@@ -85,4 +85,75 @@ describe('composer.css', () => {
   it('marks the read-only notice with a dashed border as well as its words', () => {
     expect(ruleFor('.composer__read-only')?.declarations.get('border')).toMatch(/dashed/);
   });
+
+  // T21: the composer was 287 px tall at 1280 x 720 because "To" and Send had a row each. From 48rem up (where the
+  // conversation list also moves beside the feed) the form's own grid holds the three on one row, with the hint and
+  // the count under it; below that it is the single column it was.
+  describe('the one row from 48rem up (T21)', () => {
+    const WIDE = 'min-width: 48rem';
+    const BOTH_FIELDS = '.composer .composer__to, .composer .composer__message';
+    const inRow = (selector: string) => ruleFor(selector, WIDE);
+
+    it('is three columns (To, the message box, Send) from 48rem up, and the single column it was below', () => {
+      expect(ruleFor('.composer')?.declarations.get('grid-template-columns')).toBe('minmax(0, 1fr)');
+      const row = inRow('.composer');
+      // The first column is bounded by the composer's own width too, so that 200% text, which scales every rem, cannot take
+      // all of it from the message box; Send takes what it needs.
+      expect(row?.declarations.get('grid-template-columns')).toBe('minmax(6rem, min(10rem, 28%)) minmax(0, 1fr) auto');
+      // No row gap: a row with nothing in it (the suggestions, the count) would still take its gap. The items have margins.
+      expect(row?.declarations.get('gap')).toBe('0 var(--space-3)');
+    });
+
+    it('hands the two fields\' children to the form\'s grid from 48rem up only, so that the markup, and with it the tab order, is the same in both layouts', () => {
+      expect(ruleFor(BOTH_FIELDS)).toBeUndefined();
+      expect(inRow(BOTH_FIELDS)?.declarations.get('display')).toBe('contents');
+    });
+
+    it('puts each piece in its own cell: the labels over their controls, Send at the end of the message box\'s row, the rest under the row', () => {
+      const cells: ReadonlyArray<readonly [string, string, string]> = [
+        ['.composer__to-label', '1', '1'],
+        ['.composer__message-label', '1', '2'],
+        ['.composer__to-select', '2', '1'],
+        ['.composer__input', '2', '2'],
+        ['.composer__actions', '2', '3'],
+        ['.composer .mention-list', '3', '2'],
+        ['.composer .composer__hint', '4', '1 / -1'],
+        ['.composer .composer__count', '5', '1 / -1'],
+        ['.composer .composer__alert', '6', '1 / -1'],
+        ['.composer .composer__notice', '7', '1 / -1'],
+      ];
+      for (const [selector, row, column] of cells) {
+        const rule = inRow(selector);
+        expect([selector, rule?.declarations.get('grid-row'), rule?.declarations.get('grid-column')]).toEqual([selector, row, column]);
+      }
+    });
+
+    it('lines Send up with the bottom of the message box and "To" with its top, and lets the select fill its column', () => {
+      expect(inRow('.composer__actions')?.declarations.get('align-self')).toBe('end');
+      expect(inRow('.composer__to-select')?.declarations.get('align-self')).toBe('start');
+      expect(inRow('.composer__to-select')?.declarations.get('inline-size')).toBe('100%');
+    });
+
+    it('keeps the labels close over their controls and the rest apart, with margins, because the grid has no gap between rows', () => {
+      for (const selector of ['.composer__to-label', '.composer__message-label']) expect(inRow(selector)?.declarations.get('margin-block-end')).toBe('var(--space-1)');
+      for (const selector of ['.composer .composer__hint', '.composer .composer__count', '.composer .composer__alert', '.composer .composer__notice']) {
+        expect(inRow(selector)?.declarations.get('margin-block-start')).toMatch(/^var\(--space-[1-3]\)$/);
+      }
+    });
+
+    it('sets no height of its own, only floors and ceilings: so that 200% text and more lines only make it taller', () => {
+      const keys = RULES.flatMap((rule) => [...rule.declarations.keys()]);
+      expect(keys.length).toBeGreaterThan(20);
+      expect(keys.filter((key) => /^(height|block-size)$/.test(key))).toEqual([]);
+    });
+  });
+
+  // The alert sits under Send like the notice, so it gets what the notice gets: the room that composer.tsx's reveal
+  // leaves under it, and no margin of its own (the grid's spacing and the composer's padding are the space around it).
+  it('gives the "Send error" alert the notice\'s room under it when the page scrolls to it, and no margin of its own', () => {
+    const alert = ruleFor('.composer .composer__alert');
+    expect(alert?.declarations.get('margin')).toBe('0');
+    expect(alert?.declarations.get('scroll-margin-block-end')).toBe('var(--space-5)');
+    expect(alert?.declarations.get('scroll-margin-block-end')).toBe(ruleFor('.composer .composer__notice')?.declarations.get('scroll-margin-block-end'));
+  });
 });

@@ -113,6 +113,28 @@ function expectNoStyleAttributes(): void {
   expect(document.querySelectorAll('[style]')).toHaveLength(0);
 }
 
+// What appears under Send (the "Send error" alert, the send notice) sits at the bottom of the page: on a window of
+// ordinary height it could start below the fold, so the composer scrolls the page to show it, but never so far that
+// the focused box leaves the window. jsdom has no layout, so the window's height and the rectangles are stood in for.
+const WINDOW_HEIGHT = 700;
+/** What the composer shows under Send: both get the same treatment. */
+const UNDER_SEND = ['composer__notice', 'composer__alert'] as const;
+/** The rectangles of what is under Send and of the message box, as a browser would give them, and a spy on the page's scroll. */
+function layout(underSendBottom: number, boxTop: number) {
+  Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: WINDOW_HEIGHT });
+  const rect = (top: number, bottom: number): DOMRect => ({ top, bottom, left: 0, right: 0, x: 0, y: top, width: 0, height: bottom - top, toJSON: () => ({}) });
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (UNDER_SEND.some((name) => this.classList.contains(name))) return rect(underSendBottom - 100, underSendBottom);
+    if (this.tagName === 'TEXTAREA') return rect(boxTop, boxTop + 72);
+    return rect(0, 0);
+  });
+  return vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
+}
+function restoreLayout(): void {
+  vi.restoreAllMocks();
+  Reflect.deleteProperty(document.documentElement, 'clientHeight');
+}
+
 describe('composer: the form the contract names (ui-contract section 3)', () => {
   it('is a form named "Message composer" with a textarea labelled "Message", a select labelled "To" and a Send button', () => {
     setup();
@@ -136,6 +158,18 @@ describe('composer: the form the contract names (ui-contract section 3)', () => 
   it('describes the keys in a hint read with the field', () => {
     setup();
     expect(describedBy()).toEqual([screen.getByText(COMPOSER_TEXT.hint).id]);
+  });
+
+  // T21 puts "To", the message box and Send on one row with CSS alone, so the markup keeps the order the contract's
+  // tab order and the reading order rely on: "To", the message box with its hint, Send.
+  it('keeps the reading order "To", message box, hint, Send, and puts nothing in the tab order but the three controls', () => {
+    setup();
+    const follows = (a: Element, b: Element): boolean => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    const hint = screen.getByText(COMPOSER_TEXT.hint);
+    expect(follows(to(), box())).toBe(true);
+    expect(follows(box(), hint)).toBe(true);
+    expect(follows(hint, sendButton())).toBe(true);
+    expect(screen.getByRole('form', { name: COMPOSER_TEXT.form }).querySelectorAll('[tabindex]')).toHaveLength(0);
   });
 });
 
@@ -380,6 +414,88 @@ describe('composer: sending (ui-contract section 3)', () => {
     expect(sendError()).toBeNull();
     await release();
     expect(await findSendError()).toBeTruthy();
+  });
+
+  // T21: the alert is under Send like the notice, so a window of ordinary height used to leave it below the fold,
+  // clipped, with nothing to scroll to it. It gets the notice's treatment (the same function: see the notice's
+  // tests, further down, for the rest of what that does).
+  it('scrolls the page just far enough to show the end of a new "Send error" alert, at once, once for each failure, and leaves focus in the box', async () => {
+    const scroll = layout(WINDOW_HEIGHT + 40, 300);
+    try {
+      const { user } = setup();
+      await user.type(box(), '@everyone one{Enter}');
+      const first = await findSendError();
+      // An effect: it runs after the alert is in the document, which is when findSendError returns.
+      await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+      expect(scroll).toHaveBeenLastCalledWith({ top: 40, behavior: 'instant' });
+      expect(document.activeElement).toBe(box());
+      // Typing does not scroll it back into view: only a new failure does.
+      await user.type(box(), ' more');
+      expect(scroll).toHaveBeenCalledTimes(1);
+      // The same refusal again is a new alert, announced again, and brought into view again.
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(first.isConnected).toBe(false));
+      await findSendError();
+      await waitFor(() => expect(scroll).toHaveBeenCalledTimes(2));
+    } finally {
+      restoreLayout();
+    }
+  });
+
+  it('scrolls the alert no further than keeps the message box in the window, where the composer is taller than the window', async () => {
+    const scroll = layout(WINDOW_HEIGHT + 900, 60);
+    try {
+      const { user } = setup();
+      await user.type(box(), '@everyone one{Enter}');
+      await findSendError();
+      await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+      expect(scroll).toHaveBeenLastCalledWith({ top: 60, behavior: 'instant' });
+    } finally {
+      restoreLayout();
+    }
+  });
+
+  it('scrolls nothing when the alert is already in the window', async () => {
+    const scroll = layout(WINDOW_HEIGHT - 10, 300);
+    try {
+      const { user } = setup();
+      await user.type(box(), '@everyone one{Enter}');
+      await findSendError();
+      // Lets the effect that would have scrolled run, so that "not called" is not just "not yet".
+      await act(async () => undefined);
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      restoreLayout();
+    }
+  });
+
+  it('shows the alert after Send in the reading order, and does not announce it any other way than as the alert it was', async () => {
+    const { user } = setup();
+    await user.type(box(), '@everyone one{Enter}');
+    const alert = await findSendError();
+    expect(sendButton().compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(alert.getAttribute('role')).toBe('alert');
+    expect(alert.getAttribute('aria-label')).toBe(COMPOSER_TEXT.sendError);
+    expect(alert.hasAttribute('tabindex')).toBe(false);
+  });
+
+  // T18's executor: while the suggestions for text ending in "@codex" were open, a mouse click on Send was lost. The
+  // press took focus from the box, the list closed on blur, the log grew into the room the list had taken, Send was
+  // no longer under the pointer when the button came up, and the click went to something else.
+  it('keeps focus in the message box and the suggestions open while the mouse is pressed on Send, so that the click lands', async () => {
+    const { send, user } = setup();
+    await user.type(box(), 'are you there @co');
+    expect(suggestions()).not.toBeNull();
+    // The browser's default action for a mousedown is to focus the button; the composer cancels it.
+    expect(fireEvent.mouseDown(sendButton())).toBe(false);
+    await user.pointer({ keys: '[MouseLeft>]', target: sendButton() });
+    expect(document.activeElement).toBe(box());
+    expect(suggestions()).not.toBeNull();
+    await user.pointer({ keys: '[/MouseLeft]' });
+    expect(send).toHaveBeenCalledWith({ to: CHANNEL, body: 'are you there @co' });
+    await waitFor(() => expect(box().value).toBe(''));
+    expect(suggestions()).toBeNull();
+    expect(document.activeElement).toBe(box());
   });
 });
 
@@ -719,24 +835,7 @@ describe('composer: what the bridge said about a send it accepted (the send noti
 
   // The notice sits under Send, which is the bottom of the page: on a window of ordinary height it could start
   // below the fold, so the composer scrolls the page to show it, but never so far that the focused box leaves
-  // the window. jsdom has no layout, so the window's height and the rectangles are stood in for.
-  const WINDOW_HEIGHT = 700;
-  /** The rectangles of the notice and of the message box, as a browser would give them, and a spy on the page's scroll. */
-  function layout(noticeBottom: number, boxTop: number) {
-    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: WINDOW_HEIGHT });
-    const rect = (top: number, bottom: number): DOMRect => ({ top, bottom, left: 0, right: 0, x: 0, y: top, width: 0, height: bottom - top, toJSON: () => ({}) });
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-      if (this.classList.contains('composer__notice')) return rect(noticeBottom - 100, noticeBottom);
-      if (this.tagName === 'TEXTAREA') return rect(boxTop, boxTop + 72);
-      return rect(0, 0);
-    });
-    return vi.spyOn(window, 'scrollBy').mockImplementation(() => undefined);
-  }
-  function restoreLayout(): void {
-    vi.restoreAllMocks();
-    Reflect.deleteProperty(document.documentElement, 'clientHeight');
-  }
-
+  // the window (the layout helpers are above, shared with the "Send error" alert, which gets the same treatment).
   it('scrolls the page just far enough to show the end of a new notice, at once, once for each, and leaves focus in the box', async () => {
     const scroll = layout(WINDOW_HEIGHT + 40, 300);
     try {
