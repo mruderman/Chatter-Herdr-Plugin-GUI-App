@@ -369,14 +369,16 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
     return [CHANNEL_CONVERSATION, ...byPeer, ...byPair];
   }
 
+  // Other people's messages only, as in store.ts (fixMarker): the member's own are past the pointer because they just wrote them.
   function fixMarker(): void {
     const repo = current();
-    if (!repo || selectedConversation === null) {
+    const member = me();
+    if (!repo || !member || selectedConversation === null) {
       marker = null;
       return;
     }
     const id = selectedConversation;
-    marker = loadedOf(repo).find((message) => belongsTo(message, id) && message.id > repo.readPointer)?.id ?? null;
+    marker = loadedOf(repo).find((message) => belongsTo(message, id) && message.id > repo.readPointer && message.from !== member.handle)?.id ?? null;
   }
 
   function build(): StoreSnapshot {

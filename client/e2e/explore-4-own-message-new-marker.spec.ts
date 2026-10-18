@@ -1,14 +1,14 @@
-// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 4). Written to FAIL on the current code.
-// A member sends the first message of a new direct message conversation. The conversation appears and is
-// selected, and the "New messages" separator is drawn above the member's OWN message, because the marker is
-// "the first message of the conversation past the read pointer" (state/store.ts, fixMarker) and nothing
-// excludes the member's own messages, which are by construction newer than the pointer. Nobody else has
-// written; there is nothing new for this member to read. (ui-contract section 3: the marker is for unread
-// messages.) Runs against its own bridge.
-import { loadBridgeHelpers, type BridgeEnv } from '../e2e/harness/bridge';
-import { chooseRecipient, expect, openChat, send, signIn, test } from '../e2e/harness/fixtures';
-import { UI, dmWith, ui } from '../e2e/harness/ui';
-import { POLL_MS, type World } from '../e2e/harness/world';
+// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 4), fixed: a member sends the first message of a new
+// direct message conversation, the conversation appears and is selected, and no "New messages" separator is drawn
+// above the member's OWN message. It used to be: the marker was "the first message of the conversation past the read
+// pointer" and nothing excluded the member's own, which are by construction newer than the pointer, although nobody
+// else had written and there was nothing new for this member to read. The marker now skips the member's own
+// messages (state/store.ts, fixMarker; the fake store does the same, and the conformance suite holds them equal).
+// Runs against its own bridge.
+import { loadBridgeHelpers, type BridgeEnv } from './harness/bridge';
+import { chooseRecipient, expect, openChat, send, signIn, test } from './harness/fixtures';
+import { UI, dmWith, ui } from './harness/ui';
+import { POLL_MS, type World } from './harness/world';
 
 async function privateBridge(world: World): Promise<BridgeEnv> {
   const { makeEnv } = await loadBridgeHelpers();

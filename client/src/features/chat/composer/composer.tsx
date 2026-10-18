@@ -356,6 +356,8 @@ export function Composer({ snapshot, store }: ComposerProps) {
           id={SKIP_TARGET.composer}
           class="composer__input"
           rows={2}
+          // What the member types in Hebrew or Arabic reads right to left, as it will in the feed (V5 finding 8). The box only: the mention list under it keeps the form's direction.
+          dir="auto"
           value={draft}
           disabled={!usable}
           aria-autocomplete="list"

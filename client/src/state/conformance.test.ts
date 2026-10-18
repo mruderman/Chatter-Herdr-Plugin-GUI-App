@@ -764,6 +764,63 @@ describe.each([
       expect(d.readPointer(MAIN_REPO)).toBe(100);
       expect(d.now().newMarkerBeforeId).toBeNull();
     });
+
+    // V5 finding 4. The marker says "there is something here you have not read", and a member's own message is
+    // never that: it is past the read pointer only because the member has just written it.
+    describe('for messages from other people, never for the member\'s own', () => {
+      const THOM_NEWEST = parseMessagesPage(body('messages-thom')).max_id;
+
+      it('puts no marker before the member\'s own first message in a new DM', async () => {
+        const d = await make({ as: 'thom', lastReadId: THOM_NEWEST });
+        expect(d.labels()).not.toContain('DM with kieran');
+        expect(await d.store.send({ to: 'kieran', body: 'a first word' })).toBe(true);
+        d.open('DM with kieran');
+        expect(d.now().messages.map((m) => m.body)).toEqual(['a first word']);
+        expect(d.now().newMarkerBeforeId).toBeNull();
+      });
+
+      it.each([
+        { label: 'DM with mira', to: 'mira' },
+        { label: '#chat', to: CHANNEL },
+      ])('puts no marker in $label when only the member\'s own messages are past the pointer', async ({ label, to }) => {
+        const d = await make({ as: 'thom', lastReadId: THOM_NEWEST });
+        d.open('DM with grace');
+        expect(await d.store.send({ to, body: 'my own words' })).toBe(true);
+        expect(await d.store.send({ to, body: 'and some more' })).toBe(true);
+        d.open(label);
+        expect(d.now().messages.slice(-2).map((m) => m.body)).toEqual(['my own words', 'and some more']);
+        expect(d.now().newMarkerBeforeId).toBeNull();
+      });
+
+      it('keeps the marker above the first unread message from someone else when the member\'s own comes after it', async () => {
+        const d = await make({ as: 'thom', lastReadId: THOM_NEWEST });
+        const theirs = await d.receive({ from: 'mira', to: 'thom', body: 'an unread question' });
+        expect(await d.store.send({ to: 'mira', body: 'my answer' })).toBe(true);
+        d.open('DM with mira');
+        expect(d.now().messages.slice(-2).map((m) => m.body)).toEqual(['an unread question', 'my answer']);
+        expect(d.now().newMarkerBeforeId).toBe(theirs.id);
+      });
+
+      it('puts the marker above the first unread message from someone else, not above the member\'s own that came before it', async () => {
+        const d = await make({ as: 'thom', lastReadId: THOM_NEWEST });
+        expect(await d.store.send({ to: 'mira', body: 'my question' })).toBe(true);
+        const theirs = await d.receive({ from: 'mira', to: 'thom', body: 'their answer' });
+        d.open('DM with mira');
+        expect(d.now().messages.slice(-2).map((m) => m.body)).toEqual(['my question', 'their answer']);
+        expect(d.now().newMarkerBeforeId).toBe(theirs.id);
+      });
+
+      it('still moves the read pointer to the member\'s own newest message, and leaves the marker where it was', async () => {
+        const d = await make({ as: 'mira' });
+        const marker = d.now().newMarkerBeforeId;
+        expect(marker).not.toBeNull();
+        expect(await d.store.send({ to: CHANNEL, body: 'my own, the newest' })).toBe(true);
+        await d.store.markRead();
+        expect(d.now().messages.at(-1)).toMatchObject({ from: 'mira', body: 'my own, the newest' });
+        expect(d.readPointer(MAIN_REPO)).toBe(d.now().messages.at(-1)?.id);
+        expect(d.now().newMarkerBeforeId).toBe(marker);
+      });
+    });
   });
 
   describe('arrivals, announcements and notifications', () => {

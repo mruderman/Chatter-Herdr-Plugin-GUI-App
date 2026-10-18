@@ -47,6 +47,21 @@ function openTarget(log: HTMLElement): Element | null {
   return above instanceof HTMLHeadingElement ? above : marker;
 }
 
+/**
+ * Whether one of the messages newer than `after` is the member's own. The whole handle is compared: another
+ * member's name may start like it. `messages` holds this conversation only, so a message the member sent
+ * to another conversation is not in it and moves nobody.
+ */
+function sentSince(messages: readonly Message[], after: number | undefined, me: string | null): boolean {
+  if (me === null || after === undefined) return false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.id <= after) return false;
+    if (message.from === me) return true;
+  }
+  return false;
+}
+
 interface Anchor {
   /** The first message the reader could see when older messages were asked for. */
   readonly id: number;
@@ -88,9 +103,10 @@ export class ReadingPosition {
   /**
    * After every render. `key` names the conversation (repo and conversation id): when it changes the
    * conversation counts as opened, and it is placed once it has messages to show, which may be a
-   * later render when they are still loading.
+   * later render when they are still loading. `me` is the member's handle: their own message arriving
+   * in this conversation takes the reader to the bottom (see below).
    */
-  update(key: string, messages: readonly Message[]): void {
+  update(key: string, messages: readonly Message[], me: string | null = null): void {
     const log = this.log();
     if (!log) return;
     this.watch(log);
@@ -107,7 +123,8 @@ export class ReadingPosition {
     const first = messages[0];
     const last = messages[messages.length - 1];
     if (!first || !last) return;
-    const arrived = this.lastId !== undefined && last.id > this.lastId;
+    const before = this.lastId;
+    const arrived = before !== undefined && last.id > before;
     this.firstId = first.id;
     this.lastId = last.id;
 
@@ -125,7 +142,10 @@ export class ReadingPosition {
       if (element) log.scrollTop += offsetInView(log, element) - offset;
       this.pinned = isAtBottom(log);
     } else if (arrived) {
-      // Only a reader who was at the bottom follows new messages; anyone else stays where they are.
+      // Only a reader who was at the bottom follows new messages; anyone else stays where they are. The one
+      // exception is the member's own message (V5 finding 6): it answers a send, and out of view it leaves
+      // them no sign that it went. They are then at the bottom, as if they had been there all along.
+      if (sentSince(messages, before, me)) this.pinned = true;
       if (this.pinned) log.scrollTop = log.scrollHeight;
       this.schedule();
     }

@@ -1,13 +1,13 @@
-// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 8). Written to FAIL on the current code.
-// A message body is one `<p class="message__body">` with no `dir`, so every message is laid out left to
-// right, whatever it says. A message written entirely in Hebrew or Arabic sits against the left edge of its
-// box and its closing punctuation lands at the wrong end of the line. `dir="auto"` on the body (the browser
-// picks the direction from the first strong letter) is the standard remedy; the body stays a plain text node.
-// Cyan Society members write in many languages. Runs against its own bridge.
-import { loadBridgeHelpers, type BridgeEnv } from '../e2e/harness/bridge';
-import { expect, openChat, signIn, test } from '../e2e/harness/fixtures';
-import { UI, ui } from '../e2e/harness/ui';
-import { POLL_MS, type World } from '../e2e/harness/world';
+// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 8), fixed: a message written entirely in Hebrew is laid
+// out right to left, against the right edge of its box. The body (`<p class="message__body">`) used to have no `dir`, so
+// every message was laid out left to right whatever it said: Hebrew or Arabic sat against the left edge and its closing
+// punctuation landed at the wrong end of the line. The body now has `dir="auto"` (features/chat/feed/feed.tsx), so the
+// browser picks the direction from the first strong letter, and it stays a plain text node. Cyan Society members write
+// in many languages. Runs against its own bridge.
+import { loadBridgeHelpers, type BridgeEnv } from './harness/bridge';
+import { expect, openChat, signIn, test } from './harness/fixtures';
+import { UI, ui } from './harness/ui';
+import { POLL_MS, type World } from './harness/world';
 
 async function privateBridge(world: World): Promise<BridgeEnv> {
   const { makeEnv } = await loadBridgeHelpers();

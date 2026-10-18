@@ -521,12 +521,18 @@ export function createStore(options: StoreOptions = {}): Store {
     if (current.sendNotice !== null && current.sendNotice.conversation !== id) current.sendNotice = null;
   }
 
-  /** The first message of the selected conversation past the read pointer, fixed until the next selection. */
+  /**
+   * The first message of the selected conversation past the read pointer, fixed until the next selection. Other
+   * people's messages only: a member's own is past the pointer because they have just written it, and a "New
+   * messages" separator above their own words says they have not read what they wrote (V5 finding 4). markRead
+   * still counts their own messages when it moves the pointer.
+   */
   function fixMarker(current: Live): void {
     const repo = selectedSync(current);
     const id = current.selectedConversation;
+    const me = current.me.handle;
     current.marker = repo && repo.loaded && id !== null
-      ? repo.messages.find((message) => belongsTo(message, id) && message.id > repo.readPointer)?.id ?? null
+      ? repo.messages.find((message) => belongsTo(message, id) && message.id > repo.readPointer && message.from !== me)?.id ?? null
       : null;
   }
 

@@ -252,6 +252,65 @@ describe('plain text only (SPEC section 7, ui-contract section 7)', () => {
   });
 });
 
+// V5 finding 8. A body written in Hebrew or Arabic was laid out left to right, against the left edge, with its
+// closing punctuation at the wrong end. `dir="auto"` has the browser read the direction from the body's first
+// strong letter. It goes on the body only: the sender and the time keep the page's direction, so the header and
+// the mention bar (a logical `border-inline-start` on the article) sit where they always do.
+describe('direction of the text (V5 finding 8)', () => {
+  const HEBREW = 'שלום עולם! מה שלומך?';
+  const ARABIC = 'مرحبا بالعالم! كيف حالك؟';
+  const XSS_FLAG = '__chatFeedDirXss';
+  afterEach(() => {
+    Reflect.deleteProperty(window, XSS_FLAG);
+  });
+
+  it('leaves the direction of every message body to its first strong letter', () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = renderFeed(store);
+    receiveAll(store, [
+      { from: 'grace', body: HEBREW, afterMs: 0 },
+      { from: 'grace', body: ARABIC, afterMs: 0 },
+      { from: 'thom', body: 'English first, then עברית', afterMs: 0 },
+    ]);
+    const bodies = [...log.querySelectorAll('.message__body')];
+    expect(bodies.length).toBeGreaterThanOrEqual(12);
+    for (const body of bodies) expect(body.getAttribute('dir'), body.textContent ?? '').toBe('auto');
+    for (const text of [HEBREW, ARABIC]) expect(articleWith(log, text).querySelector('.message__body')?.getAttribute('dir')).toBe('auto');
+  });
+
+  it('puts the direction on the body alone: the article, the sender, the time, the labels and the day heading keep the page\'s', () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = renderFeed(store);
+    receiveAll(store, [{ from: 'grace', body: HEBREW, afterMs: 0 }]);
+    const article = articleWith(log, HEBREW);
+    const withDir = [...log.querySelectorAll('[dir]')];
+    expect(withDir.length).toBeGreaterThan(0);
+    for (const element of withDir) expect(element.classList.contains('message__body'), element.outerHTML).toBe(true);
+    expect(article.hasAttribute('dir')).toBe(false);
+    expect(log.hasAttribute('dir')).toBe(false);
+    expect(within(log).getAllByRole('heading', { level: 3 }).every((heading) => !heading.hasAttribute('dir'))).toBe(true);
+  });
+
+  it('keeps each body one plain text node: Hebrew, and markup that would run a script if it were one', () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = renderFeed(store);
+    const image = `<img src=x onerror="window.${XSS_FLAG} = 1">`;
+    receiveAll(store, [
+      { from: 'grace', body: HEBREW, afterMs: 0 },
+      { from: 'grace', body: image, afterMs: 0 },
+    ]);
+    for (const text of [HEBREW, image]) {
+      const paragraph = articleWith(log, text).querySelector('.message__body');
+      expect(paragraph?.getAttribute('dir')).toBe('auto');
+      expect(paragraph?.textContent).toBe(text);
+      expect(paragraph?.childNodes).toHaveLength(1);
+      expect(paragraph?.firstChild?.nodeType).toBe(Node.TEXT_NODE);
+    }
+    expect(log.querySelectorAll('img, script, b, a, iframe, object, embed')).toHaveLength(0);
+    expect(Reflect.get(window, XSS_FLAG)).toBeUndefined();
+  });
+});
+
 describe('the "New messages" marker', () => {
   const MARKED = '@everyone standup in five';
 

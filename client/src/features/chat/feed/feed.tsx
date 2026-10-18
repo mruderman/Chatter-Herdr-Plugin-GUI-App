@@ -72,7 +72,10 @@ function MessageEntry({ item }: { item: Extract<FeedItem, { type: 'message' }> }
           {time}
         </time>
       )}
-      <p class="message__body">{message.body}</p>
+      {/* dir="auto": a body in Hebrew or Arabic reads right to left, by its first strong letter. On the body alone, so the header keeps the page's direction. */}
+      <p class="message__body" dir="auto">
+        {message.body}
+      </p>
       {labels.length > 0 && (
         <div class="message__labels">
           {labels.map((label) => (
@@ -162,8 +165,8 @@ export function Feed({ snapshot, store, locale, timeZone }: FeedProps) {
   const key = `${snapshot.selectedRepo ?? ''}\n${snapshot.selectedConversation ?? ''}`;
 
   useLayoutEffect(() => {
-    reading.update(key, snapshot.messages);
-  }, [reading, key, snapshot.messages]);
+    reading.update(key, snapshot.messages, me);
+  }, [reading, key, snapshot.messages, me]);
 
   useEffect(() => {
     const onVisibilityChange = () => reading.onVisibilityChange();

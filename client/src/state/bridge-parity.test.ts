@@ -739,3 +739,62 @@ describe.skipIf(!HAVE_CHATTER)('the conversation list against the real bridge an
     expect(thomShown.includes('kieran')).toBe(false);
   }, SLOW);
 });
+
+// V5 finding 4, against the real bridge: the "New messages" marker is for other people's messages. The conformance
+// suite holds the two stores to the same rule over the scripted bridge; this checks the rule on the rows the real
+// bridge writes (the sender's handle is Chatter's own `from_agent`), in a world of its own so that the DMs it makes
+// change nobody else's list.
+describe.skipIf(!HAVE_CHATTER)('the new marker against the real bridge and Chatter (needs CHATTER_JS)', () => {
+  let env: WorldEnv;
+  const stores: Store[] = [];
+
+  /** A store over the real bridge signed in as `who`, once it shows the channel. */
+  async function storeFor(who: string): Promise<Store> {
+    const store = createStore({ api: (getToken) => createApi({ baseUrl: env.base, getToken }), streamTiming: LIVE_TIMING });
+    stores.push(store);
+    await eventually(() => (store.getSnapshot().session.status === 'signed-out' ? true : undefined), 'the first /v1/me');
+    const token = env.tokens[who];
+    if (!token) throw new Error(`no token for ${who}`);
+    expect(await store.signIn(token)).toBe(true);
+    await eventually(() => (store.getSnapshot().connection === 'online' && store.getSnapshot().messages.length > 0 ? true : undefined), `${who}'s channel`);
+    return store;
+  }
+
+  beforeAll(async () => {
+    const { makeEnv } = (await import(/* @vite-ignore */ new URL(HELPERS, import.meta.url).href)) as { makeEnv: (options?: { limits?: { maxBody: number; postsPerMinute: number } }) => Promise<WorldEnv> };
+    env = await makeEnv({ limits: { maxBody: 8_000, postsPerMinute: 10_000 } });
+    env.addMember('ann', { kind: 'human' });
+    env.addMember('bob', { kind: 'human' });
+  }, SLOW);
+
+  afterAll(async () => {
+    // Before the bridge goes: its shutdown byes would start reconnects on real timers.
+    for (const store of stores) store.dispose();
+    await env?.stop();
+  });
+
+  it('has no marker above the member\'s own first message in a new DM', async () => {
+    const ann = await storeFor('ann');
+    expect(await ann.send({ to: 'bob', body: 'hello bob' })).toBe(true);
+    const dm = await eventually(() => ann.getSnapshot().conversations.find((c) => c.kind === 'direct' && c.peer === 'bob'), 'the DM in the list');
+    ann.selectConversation(dm.id);
+    await eventually(() => (ann.getSnapshot().messages.some((m) => m.body === 'hello bob') ? true : undefined), 'the DM\'s message');
+    expect(ann.getSnapshot().selectedConversation).toBe(dm.id);
+    expect(ann.getSnapshot().newMarkerBeforeId).toBeNull();
+  }, SLOW);
+
+  it('puts the marker above the first unread message from someone else, not above the member\'s own before it', async () => {
+    const first = await storeFor('ann');
+    // Ann has read everything there is: the setup message (and her DM, if the test above ran first, is not in #chat).
+    await first.markRead();
+    expect(await first.send({ to: CHANNEL, body: 'ann answers' })).toBe(true);
+    const bob = await env.post('bob', CHANNEL, 'bob goes on');
+    expect(bob.status, JSON.stringify(bob.body)).toBe(CREATED);
+    const bobId = parseSendResult(bob.body).id;
+    // A fresh store reads the pointer the bridge kept and puts the marker where a reload would.
+    const again = await storeFor('ann');
+    await eventually(() => (again.getSnapshot().messages.some((m) => m.id === bobId) ? true : undefined), 'bob\'s message');
+    expect(again.getSnapshot().messages.map((m) => m.from)).toEqual(['flan', 'ann', 'bob']);
+    expect(again.getSnapshot().newMarkerBeforeId).toBe(bobId);
+  }, SLOW);
+});

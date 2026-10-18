@@ -3,6 +3,7 @@ import { act } from 'preact/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render } from '../../../../test/render';
 import { ManualClock } from '../../../api/clock';
+import { CHANNEL } from '../../../api/types';
 import { createFakeStore, type FakeStore } from '../../../state/fake';
 import '../../shell/test-utils';
 import { Feed } from './feed';
@@ -40,10 +41,11 @@ function advance(ms: number): void {
   });
 }
 
-function receive(store: FakeStore, count = 1): void {
+/** Messages from another member; `from` is "mira" unless the test's member is mira, whose own they would then be. */
+function receive(store: FakeStore, count = 1, from = 'mira'): void {
   for (let index = 0; index < count; index += 1) {
     act(() => {
-      store.receive({ from: 'mira', body: `arrival ${index}` });
+      store.receive({ from, body: `arrival ${index}` });
     });
   }
 }
@@ -122,7 +124,8 @@ describe('new messages', () => {
     const store = createFakeStore({ as: 'mira', clock: clockAfterRecordings() });
     const log = open(store);
     const placed = log.scrollTop;
-    receive(store, 3);
+    // From thom: these were from mira, the test's own member, before a member's own message moved the reader (V5 finding 6).
+    receive(store, 3, 'thom');
     expect(log.scrollTop).toBe(placed);
     expect(layout.offsetInView(log, within(log).getByRole('separator', { name: 'New messages' }))).toBe(0);
   });
@@ -452,5 +455,121 @@ describe('when the log changes size', () => {
     expect(disconnect).not.toHaveBeenCalled();
     cleanup();
     expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
+// V5 finding 6. Only a reader at the bottom follows new messages, which is right for other people's: a reader
+// who scrolled up is reading something else. The member's own send is different, because the message is the
+// answer to what they just did, and out of view it leaves them with no sign that it went. The rule for
+// everyone else is the one the tests above fix; these add the exception for the member's own.
+describe('the member\'s own messages', () => {
+  async function sendOwn(store: FakeStore, to: string, text: string): Promise<void> {
+    await act(async () => {
+      expect(await store.send({ to, body: text })).toBe(true);
+    });
+  }
+
+  /** Where `text` sits below the top of the log's visible area, in px. */
+  function placeOf(log: HTMLElement, text: string): number {
+    const article = within(log).getByText(text).closest('article');
+    if (!article) throw new Error(`no message "${text}" in the log`);
+    return layout.offsetInView(log, article);
+  }
+
+  it('bring a reader who scrolled up to the bottom, where the message is in view', async () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = open(store);
+    scrollLogTo(log, 40);
+    await sendOwn(store, CHANNEL, 'my reply');
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+    expect(placeOf(log, 'my reply')).toBeGreaterThanOrEqual(0);
+    expect(placeOf(log, 'my reply') + layout.row).toBeLessThanOrEqual(layout.viewport);
+  });
+
+  it('bring a reader who was placed at the "New messages" separator to the bottom too', async () => {
+    const store = createFakeStore({ as: 'mira', clock: clockAfterRecordings() });
+    const log = open(store);
+    expect(log.scrollTop).toBeLessThan(layout.maxScroll(log));
+    await sendOwn(store, CHANNEL, 'my reply');
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+  });
+
+  it('keep the reader at the bottom afterwards, as one who was there: the next message from someone else follows', async () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = open(store);
+    scrollLogTo(log, 40);
+    await sendOwn(store, CHANNEL, 'my reply');
+    receive(store, 2);
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+  });
+
+  it('leave the rule for everyone else as it was: another member\'s message does not move a reader who scrolled up', async () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = open(store);
+    scrollLogTo(log, 40);
+    receive(store, 3);
+    expect(log.scrollTop).toBe(40);
+    // Whose it is comes from the whole handle: a name that only starts like the member's own is another member.
+    act(() => {
+      store.receive({ from: 'thom-two', body: 'a name that starts like the member\'s own' });
+    });
+    expect(log.scrollTop).toBe(40);
+    await sendOwn(store, CHANNEL, 'my reply');
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+  });
+
+  it('leave the reader where they are when the message went to another conversation', async () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = open(store);
+    scrollLogTo(log, 40);
+    await sendOwn(store, 'mira', 'a private word');
+    expect(within(log).queryByText('a private word')).toBeNull();
+    expect(log.scrollTop).toBe(40);
+    // The same for a message of the member's own that the stream brings for a conversation that is not open.
+    act(() => {
+      store.receive({ from: 'thom', to: 'grace', body: 'another private word' });
+    });
+    expect(log.scrollTop).toBe(40);
+  });
+
+  it('count only what is newer than the last message seen: an older message of the member\'s own does not move a reader who scrolled up when someone else writes', async () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = open(store);
+    // The member wrote earlier in this conversation: that message is old news by the time the next one arrives.
+    await sendOwn(store, CHANNEL, 'my reply');
+    scrollLogTo(log, 40);
+    receive(store, 2);
+    expect(log.scrollTop).toBe(40);
+  });
+
+  it('move the reader once: a render that brings nothing new, and the next message from someone else, leave a reader who scrolled up again where they are', async () => {
+    const store = createFakeStore({ as: 'thom', lastReadId: 100, clock: clockAfterRecordings() });
+    const log = open(store);
+    scrollLogTo(log, 40);
+    await sendOwn(store, CHANNEL, 'my reply');
+    expect(log.scrollTop).toBe(layout.maxScroll(log));
+    scrollLogTo(log, 80);
+    // The store publishes again (as it does for any change) with the same messages.
+    act(() => store.setConnection('offline'));
+    act(() => store.setConnection('online'));
+    expect(log.scrollTop).toBe(80);
+    receive(store);
+    expect(log.scrollTop).toBe(80);
+  });
+
+  it('are acknowledged once the reader is back at the bottom, like any message of a reader who is there', async () => {
+    // Everything recorded is read (pointer 14), so the pointer shows which message the acknowledgement reached.
+    const store = createFakeStore({ as: 'thom', lastReadId: 14, clock: clockAfterRecordings() });
+    const markRead = vi.spyOn(store, 'markRead');
+    const log = open(store);
+    advance(500);
+    expect(markRead).toHaveBeenCalledTimes(1);
+    scrollLogTo(log, 40);
+    await sendOwn(store, CHANNEL, 'my reply');
+    advance(499);
+    expect(markRead).toHaveBeenCalledTimes(1);
+    advance(1);
+    expect(markRead).toHaveBeenCalledTimes(2);
+    expect(store.readPointer(REPO)).toBe(store.getSnapshot().messages.at(-1)?.id);
   });
 });

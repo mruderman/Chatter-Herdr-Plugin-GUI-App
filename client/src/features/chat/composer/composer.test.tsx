@@ -160,6 +160,28 @@ describe('composer: the form the contract names (ui-contract section 3)', () => 
     expect(describedBy()).toEqual([screen.getByText(COMPOSER_TEXT.hint).id]);
   });
 
+  // V5 finding 8. What a member writes in Hebrew or Arabic is shown right to left in the feed, so the box they write it in
+  // takes the direction of its first strong letter as well. Only the box: the labels, the hint, "To" and Send keep the page's.
+  it('lets the browser pick the direction of what is typed in the message box, and of nothing else in the form', () => {
+    setup();
+    expect(box().getAttribute('dir')).toBe('auto');
+    const form = screen.getByRole('form', { name: COMPOSER_TEXT.form });
+    expect([...form.querySelectorAll('[dir]')]).toEqual([box()]);
+  });
+
+  it('still suggests a mention typed inside Hebrew text, in a list that sits in the form\'s own direction under the box', async () => {
+    const { user } = setup();
+    await user.type(box(), 'שלום @mi');
+    expect(box().value).toBe('שלום @mi');
+    expect(optionNames()).toContain('mira (Human)');
+    const list = screen.getByRole('listbox', { name: COMPOSER_TEXT.suggestions });
+    expect(list.hasAttribute('dir')).toBe(false);
+    expect(list.closest('[dir]')).toBeNull();
+    expect(box().compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    await user.keyboard('{Enter}');
+    expect(box().value).toBe('שלום @mira ');
+  });
+
   // T21 puts "To", the message box and Send on one row with CSS alone, so the markup keeps the order the contract's
   // tab order and the reading order rely on: "To", the message box with its hint, Send.
   it('keeps the reading order "To", message box, hint, Send, and puts nothing in the tab order but the three controls', () => {

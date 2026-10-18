@@ -1,15 +1,15 @@
-// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 6). Written to FAIL on the current code.
-// A reader scrolls up in a long feed, then writes and sends a message. The composer clears, the message is
-// appended at the end of the feed, and the feed stays where it was: the member's own message is thousands of
-// pixels out of view, with nothing (no "jump to latest", no scroll) to show that the send worked. The
-// reading-position rule ("only a reader who was at the bottom follows new messages", reading-position.ts)
-// is right for other people's messages; for the member's own send it leaves them without confirmation.
+// Exploratory pass (docs/runbooks/exploratory-pass.md, finding 6), fixed: a reader scrolls up in a long feed, then
+// writes and sends a message, and the sent message is on screen afterwards. It used to stay thousands of pixels out of
+// view, with nothing (no "jump to latest", no scroll) to show that the send worked. The reading-position rule ("only a
+// reader who was at the bottom follows new messages", features/chat/feed/reading-position.ts) is right for other
+// people's messages and still holds for them; the member's own message arriving in the conversation they are looking
+// at now takes the feed to the newest message, as if they had been at the bottom.
 // Runs against its own bridge, with the channel rows written straight into that scratch Chatter database.
 import path from 'node:path';
-import { loadBridgeHelpers, type BridgeEnv } from '../e2e/harness/bridge';
-import { expect, openChat, send, signIn, test } from '../e2e/harness/fixtures';
-import { ui } from '../e2e/harness/ui';
-import { POLL_MS, type World } from '../e2e/harness/world';
+import { loadBridgeHelpers, type BridgeEnv } from './harness/bridge';
+import { expect, openChat, send, signIn, test } from './harness/fixtures';
+import { ui } from './harness/ui';
+import { POLL_MS, type World } from './harness/world';
 
 async function privateBridge(world: World): Promise<BridgeEnv> {
   const { makeEnv } = await loadBridgeHelpers();
