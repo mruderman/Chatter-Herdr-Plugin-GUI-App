@@ -1,5 +1,6 @@
 // Props the shell components take. They are plain data and callbacks on purpose: the shell knows
 // nothing about the API module or the store, so whoever wires the app maps those onto these types.
+import { ACCESS_REVOKED } from '../../wording';
 
 export type MemberKind = 'human' | 'computational';
 
@@ -15,7 +16,7 @@ export const CONNECTION_LABEL: Readonly<Record<ConnectionStatus, string>> = {
   online: 'Online',
   syncing: 'Syncing',
   offline: 'Offline',
-  revoked: 'Access revoked',
+  revoked: ACCESS_REVOKED,
 };
 
 export interface ShellMember {

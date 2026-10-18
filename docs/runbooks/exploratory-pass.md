@@ -1,6 +1,6 @@
 # Exploratory GUI pass (V5 of the deploy-and-verify slice)
 
-> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`) and **finding 10 on 2026-10-16** (commit `99cc611`): their specs moved to `client/e2e/` and now guard the fixes. **Finding 9 on 2026-10-18** (bridge route `5daccbe`, client `baa5277`). `npm run e2e:pending` fails the remaining ones (2, 3, 4, 5, 6 and 8), each for the reason it names. The text below is the pass as it was found.
+> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`) and **finding 10 on 2026-10-16** (commit `99cc611`): their specs moved to `client/e2e/` and now guard the fixes. **Finding 9 on 2026-10-18** (bridge route `5daccbe`, client `baa5277`) and **findings 2 and 3 on 2026-10-18** (`07eaabe`). `npm run e2e:pending` fails the remaining ones (4, 5, 6 and 8), each for the reason it names. The text below is the pass as it was found.
 >
 > When another finding is fixed, move its spec into `client/e2e/` and change its harness imports from `../e2e/harness/` to `./harness/`.
 
@@ -106,7 +106,7 @@ the log. Repro: any member, a channel with enough messages for the log to scroll
 Spec `client/e2e-pending/explore-1-feed-page-scroll-void.spec.ts`: `Expected: < 100  Received: 7242` ("pixels the page scrolls beyond the
 bottom of the composer, the last thing on it").
 
-**2. Rotating your own token destroys the new token.** *Defect against the UI contract* (section 4: the "New token for
+**2. Rotating your own token destroys the new token.** **FIXED 2026-10-18 (`07eaabe`).** *Defect against the UI contract* (section 4: the "New token for
 {handle}" dialog, "This token is shown once"; section 8: the confirmation warns about one's own account).
 Did: signed in with a token as an admin, Admin, "Rotate token for me", Rotate (twice, with two admins). Expected: the dialog
 shows the new token for copying. Happened: the dialog is on screen 57 ms (a mutation log: dialog at 4931 ms, a 401 on the
@@ -118,7 +118,7 @@ token existed only in the dialog, so a token-signed-in admin is locked out; the 
 Spec `explore-2-self-rotate-token-lost.spec.ts`: `Error: the "New token" dialog was replaced by the Sign in view; the one-time
 token is lost ... element(s) not found`.
 
-**3. A revoked member's Send does nothing and says nothing.** *Usability* (a silent failure; the contract's "Send error" text is
+**3. A revoked member's Send does nothing and says nothing.** **FIXED 2026-10-18 (`07eaabe`).** *Usability* (a silent failure; the contract's "Send error" text is
 "Not sent: " plus the bridge's message, and here no request is made, so the contract does not strictly cover it).
 Did: revoked a signed-in member from the admin tab (twice, a computational member and an admin); typed a message and pressed
 Enter. Expected: the "Send error" alert. Happened: the Connection status reads "Access revoked", but the box and Send stay

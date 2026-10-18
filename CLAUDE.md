@@ -19,8 +19,8 @@ git clone https://github.com/marcvermeeren/chatter.git ~/src/chatter   # dist/ i
 export CHATTER_JS=~/src/chatter/dist/bin/chatter.js
 node --version        # needs 22.5 or later
 npm test              # expect 262 passing, none skipped
-npm --prefix client ci && npm --prefix client test        # expect 1633 passing (with CHATTER_JS set; some skip without it)
-npm --prefix client run e2e                               # builds client/dist, boots a real bridge; expect 59 passed
+npm --prefix client ci && npm --prefix client test        # expect 1658 passing (with CHATTER_JS set; some skip without it)
+npm --prefix client run e2e                               # builds client/dist, boots a real bridge; expect 62 passed
 ```
 (`client/` needs its own `npm ci` with `ignore-scripts`; Playwright uses an already cached Chromium: never run `playwright install` without Flan's yes. The one ✘ in the E2E list is a `test.fail()` canary that counts as passed. `docs/review/final-check.py` runs everything plus the gate mutations.)
 

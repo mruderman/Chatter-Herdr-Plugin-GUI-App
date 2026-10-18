@@ -1,6 +1,6 @@
 // The store contract: what the views read and the actions they take, and nothing more. T5
 // implements it over src/api; fake.ts imitates it from the recorded fixtures so views can be built
-// and tested first. Frozen at gate G1. Text that docs/ui-contract.md fixes (conversation labels,
+// and tested first. Frozen at gate G1, then widened on purpose by T18 (`sendNotice`, `dismissSendNotice`), T19 (conversations) and T20 (`followRotation`), each with its tests in both stores. Text that docs/ui-contract.md fixes (conversation labels,
 // announcements) is produced by the store, so the views and the E2E specs see one spelling.
 //
 // Board, member administration and audit are not here: those views read the API directly
