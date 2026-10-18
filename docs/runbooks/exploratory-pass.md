@@ -1,6 +1,6 @@
 # Exploratory GUI pass (V5 of the deploy-and-verify slice)
 
-> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`) and **finding 10 on 2026-10-16** (commit `99cc611`): their specs moved to `client/e2e/` and now guard the fixes. **Finding 9 on 2026-10-18** (bridge route `5daccbe`, client `baa5277`) and **findings 2 and 3 on 2026-10-18** (`07eaabe`). `npm run e2e:pending` fails the remaining ones (4, 5, 6 and 8), each for the reason it names. The text below is the pass as it was found.
+> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`) and **finding 10 on 2026-10-16** (commit `99cc611`): their specs moved to `client/e2e/` and now guard the fixes. **Finding 9 on 2026-10-18** (bridge route `5daccbe`, client `baa5277`) and **findings 2 and 3 on 2026-10-18** (`07eaabe`) and **findings 4, 6 and 8 on 2026-10-18** (`b416f50`). `npm run e2e:pending` fails the remaining one (5), for the reason it names. The text below is the pass as it was found.
 >
 > When another finding is fixed, move its spec into `client/e2e/` and change its harness imports from `../e2e/harness/` to `./harness/`.
 
@@ -128,7 +128,7 @@ message it had loaded, DMs included, until it is reloaded.
 Spec `explore-3-revoked-send-silent.spec.ts`: `Error: a send that goes nowhere must say so: no "Send error" alert appeared ...
 element(s) not found`.
 
-**4. The first message of a new DM is marked "New messages".** *Usability.*
+**4. The first message of a new DM is marked "New messages".** **FIXED 2026-10-18 (`b416f50`).** *Usability.*
 Did: as `ivo` (pointer 0) and as `flan`, chose another member in "To" and sent a first message. Expected: nothing is new for the
 sender. Happened: the conversation opens with the "New messages" separator above the member's own message (the marker is the
 first message past the read pointer, and the member's own message is always newer than it; `fixMarker` in `state/store.ts`).
@@ -143,7 +143,7 @@ says what happened; the DM's old message appeared on the second press and the bu
 Spec `explore-5-load-older-no-visible-change.spec.ts`: `Error: one press of "Load older messages" in a DM fetched a page of
 other conversations; the view did not change ... element(s) not found`.
 
-**6. After sending while scrolled up, the member's message is out of view.** *Usability.*
+**6. After sending while scrolled up, the member's message is out of view.** **FIXED 2026-10-18 (`b416f50`).** *Usability.*
 Did: scrolled the feed up, sent a message (twice: with the log 3,000 px from the end, and in the spec with the wheel). Expected: the
 sent message is visible as confirmation. Happened: the composer clears, the feed stays (5,845 px from the end); there is no "jump
 to latest". The reading-position rule (only a reader at the bottom follows) is right for others' messages, not for the member's own send.
@@ -158,7 +158,7 @@ needs a page scroll each time.
 Spec `explore-7-composer-below-fold.spec.ts`: `the message box starts below the bottom of a 720 px window ... Expected: in
 viewport  Received: viewport ratio 0`.
 
-**8. A message written in Hebrew or Arabic is laid out left to right.** *Usability.*
+**8. A message written in Hebrew or Arabic is laid out left to right.** **FIXED 2026-10-18 (`b416f50`).** *Usability.*
 Did: posted pure Hebrew and Arabic messages (live, as a member). Expected: right to left (a closing "!" or "?" at the left end of
 the line, text against the right edge). Happened: `.message__body` has no `dir`, computed direction `ltr`, the text sits against the left
 edge and the trailing punctuation lands on the wrong end. `dir="auto"` on the body is the standard remedy and keeps it a text node.
