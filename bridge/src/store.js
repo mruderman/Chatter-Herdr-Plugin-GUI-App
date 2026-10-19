@@ -63,9 +63,31 @@ const toMember = (r) => (r ? ({
   last_seen_at: r.last_seen_at ?? null,
 }) : null);
 
+// bridge.db holds token hashes, so other local accounts must not read it. A directory this call creates is
+// ours to close (0700 on every level `recursive` makes). One that already existed may be shared via
+// CHATTER_BRIDGE_STATE_DIR, so it is never chmodded, only warned about. The db file is the bridge's own, so it is
+// always forced to 0600; creating it 0600 up front matters because SQLite gives -wal/-shm the db file's mode at the
+// moment it creates them, and the WAL pragma runs before any chmod could.
+function prepareStateFile(file) {
+  const dir = path.dirname(file);
+  let existed = true;
+  try { fs.statSync(dir); } catch (e) { if (e.code !== 'ENOENT') throw e; existed = false; }
+  if (existed) {
+    if (fs.statSync(dir).mode & 0o077) {
+      process.stderr.write(`chatter-bridge: state directory ${dir} is readable by other accounts; run chmod 700 on it\n`);
+    }
+  } else {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  fs.closeSync(fs.openSync(file, 'a', 0o600));
+  for (const f of [file, `${file}-wal`, `${file}-shm`]) {
+    try { fs.chmodSync(f, 0o600); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
+}
+
 export class Store {
   constructor(file) {
-    if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (file !== ':memory:') prepareStateFile(file);
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;');
     this.db.exec(SCHEMA);

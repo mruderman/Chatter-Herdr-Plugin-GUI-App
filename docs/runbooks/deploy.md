@@ -92,8 +92,10 @@ The example's forms (a plain `KEY=/absolute/path`, and single-quoted JSON for `C
 systemd. Checked here: `sh` keeps the single-quoted JSON intact. systemd's side follows `man systemd.exec` and was not
 run. `serve` refuses to start until an admin exists.
 
-The state directory holds `bridge.db` (token hashes among other things). It is created with the account's umask; run
-`chmod 700 ~/.local/state/chatter-bridge` (or your `CHATTER_BRIDGE_STATE_DIR`) so other local accounts cannot read it.
+The state directory holds `bridge.db` (token hashes among other things). The bridge creates the directory 0700 and
+`bridge.db` 0600 itself. A directory that already exists is left as it is and the bridge warns on stderr if other accounts
+can read it, so `chmod 700 ~/.local/state/chatter-bridge` (or your `CHATTER_BRIDGE_STATE_DIR`) only matters for a
+directory made beforehand.
 
 ## 4. Install the unit and start it
 Only on the host where the bridge is really installed.
@@ -215,8 +217,9 @@ For `baremetalcyansociety`, account `letta`. Needs Flan's explicit go-ahead and 
 - [ ] The bridge runs as `letta`, the account that runs Herdr and the agents (SPEC section 10). Its policy governs the HTTP
   path only: a process running as `letta` can read every Chatter database and edit the bridge's registry. That is a
   known risk to accept for the MVP, not something this install removes.
-- [ ] `init --handle <name> --login <login>` (with `--handle`, so it does not depend on the admin config directory), then
-  `chmod 700` of the state directory.
+- [ ] `init --handle <name> --login <login>` (with `--handle`, so it does not depend on the admin config directory). The
+  bridge creates its state directory 0700 and `bridge.db` 0600; an existing directory is left as it is and warned about,
+  so `chmod 700` matters only for one made beforehand.
 - [ ] Lingering is on for `letta` (`loginctl show-user letta -p Linger`), or the service stops at logout.
 - [ ] The Chatter on production is the one the 215 tests ran against (`docs/runbooks/chatter-prod/`).
 - [ ] The first start is read-only against the real state: `/healthz` lists the six repositories. No `chatter post`, `send`
