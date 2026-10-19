@@ -42,8 +42,11 @@ the client (the release) come from the same one.
 ```sh
 cd ~/Chatter-Herdr-Plugin-GUI-App
 git fetch && git checkout <commit>
-RELEASES_DIR=~/chatter-bridge/releases deploy/build-client.sh
+env -u NODE_ENV RELEASES_DIR=~/chatter-bridge/releases deploy/build-client.sh
 ```
+
+Run it with `NODE_ENV` unset, as above: with `NODE_ENV=production`, `npm ci` skips the dev dependencies and the build stops
+with `vite: not found` (exit 127; seen in the V6 walkthrough).
 
 The script runs `npm ci --ignore-scripts`, `npm run build` and `npm run check:dist` in `client/`, and prints success
 only after all three pass and the release is in place. Then it prints:
@@ -88,6 +91,15 @@ node --no-warnings bridge/bin/chatter-bridge.js init --handle <name> --login <ta
 node --no-warnings bridge/bin/chatter-bridge.js member add <handle> --kind computational     # the token is shown once
 ```
 
+`init` gives the admin no token: on the tailnet the admin signs in by Tailscale login. To sign in without Tailscale (a
+check on loopback, or a test host), give the admin a token with `token rotate <name>`. `member add` and `token rotate`
+print the token once, as the last line of their output; when you script them, send that output to a file only the account
+can read rather than to the screen or a log:
+
+```sh
+(umask 077; node --no-warnings bridge/bin/chatter-bridge.js token rotate <name> > ~/admin.tok)   # read it, then delete it
+```
+
 The example's forms (a plain `KEY=/absolute/path`, and single-quoted JSON for `CHATTER_CMD`) are valid for both `sh` and
 systemd. Checked here: `sh` keeps the single-quoted JSON intact. systemd's side follows `man systemd.exec` and was not
 run. `serve` refuses to start until an admin exists.
@@ -110,7 +122,9 @@ systemctl --user status chatter-bridge
 journalctl --user -u chatter-bridge -n 30
 ```
 
-`systemd-analyze --user verify` printed nothing and exited 0 on the laptop. A host without `/usr/bin/node` gets a warning
+`systemd-analyze --user verify` printed nothing and exited 0 on the laptop. It does not check the Node version, and it
+also passes the unedited unit on a host whose `/usr/bin/node` is too old: run the node named in `ExecStart` (and any node
+named in `CHATTER_CMD`) with `--version`; it must be 22.13 or later. A host without `/usr/bin/node` gets a warning
 about that path and nothing else should appear. The hardening lines (`NoNewPrivileges`, `PrivateTmp`) are untested on a real
 host. If the service stops at once, `journalctl` says why: no admin yet, no `index.html` in the static directory (build and
 place a release first), or a port in use.
@@ -158,13 +172,15 @@ curl -sS http://127.0.0.1:8791/
   `/v1/me` names the member; the stream answers `200 text/event-stream` with `event: hello` and ends with curl exit 28
   when `--max-time` stops it, which is the intended end. A bridge that sees no repositories answers the stream with
   `404 no_such_repo`: check `CHATTER_STATE_DIR` then.
+- A `502` with `chatter_error` from `/healthz` or `/v1/repos` means the bridge could not run Chatter; the reason is only in
+  its log (`journalctl --user -u chatter-bridge`), for example a `CHATTER_CMD` whose node is too old (section 3).
 - Then the same `curl -sSI`, `/healthz` and `/v1/me` against `https://<machine>.<tailnet>.ts.net:8446` from another tailnet
   machine (not run).
 
 ## 7. Upgrade
 1. In the checkout: `git fetch && git checkout <new-commit>`. The running bridge keeps the code it loaded at start (it has
-   no dynamic imports: `grep -rn "import(\|require(" bridge/` finds only two JSDoc comments).
-2. `RELEASES_DIR=~/chatter-bridge/releases deploy/build-client.sh`; `revision` must not end in `-dirty`.
+   no dynamic imports: `grep -rn "import(\|require(" bridge/src bridge/bin` finds only two JSDoc comments).
+2. `env -u NODE_ENV RELEASES_DIR=~/chatter-bridge/releases deploy/build-client.sh`; `revision` must not end in `-dirty`.
 3. If the upgrade touches the bridge, copy the state directory first (section 9).
 4. `systemctl --user restart chatter-bridge`. This is what switches both the bridge's code and the served client. Open
    streams end with `bye shutdown` and clients reconnect.
@@ -177,7 +193,7 @@ the checkout back, or the bridge's code and the client no longer match.
 ```sh
 ls -l ~/chatter-bridge/releases                      # the previous release; a -dirty one has no commit to return to
 git -C ~/Chatter-Herdr-Plugin-GUI-App checkout <previous-sha>
-ln -s <previous-release> ~/chatter-bridge/releases/current.new
+ln -s <previous-revision> ~/chatter-bridge/releases/current.new     # the bare directory name: a relative link, as the script makes
 mv -T ~/chatter-bridge/releases/current.new ~/chatter-bridge/releases/current      # GNU mv: an atomic swap
 systemctl --user restart chatter-bridge
 ```

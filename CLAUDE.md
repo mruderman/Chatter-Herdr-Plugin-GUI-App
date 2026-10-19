@@ -10,7 +10,8 @@ A bridge and web client that give every Cyan Society member, human or computatio
 
 - M1 spec: done. M2 bridge: done. **M3 web client core: done**, its gate passes, and G2 (the adversarial review, 7 rounds) is closed. On the final tree: 215 bridge tests with real Chatter (none skipped), 1463 client unit tests, 29 E2E specs, and the three gate mutations (break `canSee`, drop the `@everyone` rule, drop the CSP) each turn their named spec red.
 - **Source of truth for where we are: `docs/STATUS.md` (and git), not this file.** It holds the running tasks, the Debt list of open findings with their evidence, and the unverified list (real Herdr delivery, a real agent run, screen readers, Firefox and Safari, a real OS notification).
-- **Next: deploy-and-verify** (`docs/plans/deploy-verify.md`: a repeatable build, the systemd unit, a real-Herdr smoke on a test host, a real agent run), then M4 (archive and export, with client-side search) and an optional PWA slice, each planned in `docs/plans/` and approved by Flan before it is dispatched. M5 packaging and M6 verification follow. Gates are in `docs/SPEC.md` section 11.
+- **Deploy-and-verify: done** (2026-10-18; its gate passes; Letta Code and Prime Agent stay unverified by Flan's decision). On the final tree: 268 bridge tests with real Chatter, 1737 client unit tests, 87 E2E, the real-Herdr smoke 21 of 21, and a clean-directory walk through the runbook to a signed-in page.
+- **Next: V7, the production install** (needs Flan's explicit go-ahead and a window; `docs/runbooks/deploy.md` section 11). Then M4 (archive and export, with client-side search) and M5 (the PWA), each planned in `docs/plans/` and approved by Flan before it is dispatched. M6 verification follows. Gates are in `docs/SPEC.md` section 11.
 
 ## Run the tests (baseline before any change)
 
@@ -18,11 +19,11 @@ A bridge and web client that give every Cyan Society member, human or computatio
 git clone https://github.com/marcvermeeren/chatter.git ~/src/chatter   # dist/ is committed; no build needed
 export CHATTER_JS=~/src/chatter/dist/bin/chatter.js
 node --version        # needs 22.5 or later
-npm test              # expect 262 passing, none skipped
-npm --prefix client ci && npm --prefix client test        # expect 1698 passing (with CHATTER_JS set; some skip without it)
-npm --prefix client run e2e                               # builds client/dist, boots a real bridge; expect 85 passed
+npm test              # expect 268 passing, none skipped
+npm --prefix client ci && npm --prefix client test        # expect 1737 passing (with CHATTER_JS set; some skip without it)
+npm --prefix client run e2e                               # builds client/dist, boots a real bridge; expect 87 passed
 ```
-(`client/` needs its own `npm ci` with `ignore-scripts`; Playwright uses an already cached Chromium: never run `playwright install` without Flan's yes. The one ✘ in the E2E list is a `test.fail()` canary that counts as passed. `docs/review/final-check.py` runs everything plus the gate mutations.)
+(Unset `NODE_ENV` first: `production` breaks the client's Vitest and the build's `npm ci`. `client/` needs its own `npm ci` with `ignore-scripts`; Playwright uses an already cached Chromium: never run `playwright install` without Flan's yes. The one ✘ in the E2E list is a `test.fail()` canary that counts as passed. `docs/review/final-check.py` runs everything plus the gate mutations.)
 
 Contract tests run the bridge against a real Chatter CLI in a scratch repo (no Herdr). Without `CHATTER_JS` they skip.
 

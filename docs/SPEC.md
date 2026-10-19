@@ -147,7 +147,7 @@ Run `CHATTER_JS=<chatter clone>/dist/bin/chatter.js npm test`. Current state (en
 | M1 Spec | done |
 | M2 Bridge | done: contract tests pass against Chatter 0.19.0, including the `@everyone` rejection |
 | M3 Client core | done: two clients exchange messages end to end in headless Chromium against a real bridge and Chatter; a DM is invisible to a third member; a non-admin's `@everyone` is refused with a visible error; the main flow works by keyboard alone; axe reports nothing serious in three themes |
-| Deploy and verify (between M3 and M4) | a repeatable build and runbook, and a real-Herdr smoke on a test host with every item recorded as pass, fail or blocked (`docs/plans/deploy-verify.md`) |
+| Deploy and verify (between M3 and M4) | done (2026-10-18): a repeatable build and runbook, and a real-Herdr smoke on a test host with every item recorded as pass, fail or blocked (`docs/plans/deploy-verify.md`); Letta Code and Prime Agent unverified by decision |
 | M4 Archive and export, with search | an offline export matches the online export byte for byte; search over a seeded 10,000-message corpus works in each mode and with the case toggle, a catastrophic regular expression cancels and the page stays responsive, a message holding `<img onerror>` renders as text, a DM between two other members never appears, and axe is clean in three themes |
 | M5 Packaging | both installers build and the PWA passes the offline end-to-end run |
 | M6 Verification on Flan's machines | the manual checklist passes or becomes tracked fixes |

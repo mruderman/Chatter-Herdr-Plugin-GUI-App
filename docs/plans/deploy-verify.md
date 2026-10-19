@@ -1,6 +1,6 @@
 # Deploy and verify (between M3 and M4)
 
-**Status:** plan, written 2026-10-13, **approved by Flan 2026-10-13** ("excellent"), updated the same day with the production facts below. Branch: `deploy-verify`, from `main`, created when work starts and deleted when it lands.
+**Status: closed 2026-10-18 (V6); the gate passes; results in `docs/STATUS.md`. V7 waits for Flan.** Plan written 2026-10-13, **approved by Flan 2026-10-13** ("excellent"), updated the same day with the production facts below. Branch: `deploy-verify`, from `main`, created when work starts and deleted when it lands.
 
 ## Why this comes first
 Every gate so far ran against Chatter without Herdr, and no real agent has used the member client. What is unverified
