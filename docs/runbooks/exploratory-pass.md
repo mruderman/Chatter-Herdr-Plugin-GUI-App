@@ -1,8 +1,6 @@
 # Exploratory GUI pass (V5 of the deploy-and-verify slice)
 
-> **After the merge:** the failing reproductions live in `client/e2e-pending/` with their own config, so `npm run e2e` stays green. **Findings 1 and 7 were fixed on 2026-10-14** (commit `a69d030`) and **finding 10 on 2026-10-16** (commit `99cc611`): their specs moved to `client/e2e/` and now guard the fixes. **Finding 9 on 2026-10-18** (bridge route `5daccbe`, client `baa5277`) and **findings 2 and 3 on 2026-10-18** (`07eaabe`) and **findings 4, 6 and 8 on 2026-10-18** (`b416f50`). `npm run e2e:pending` fails the remaining one (5), for the reason it names. The text below is the pass as it was found.
->
-> When another finding is fixed, move its spec into `client/e2e/` and change its harness imports from `../e2e/harness/` to `./harness/`.
+> **All ten findings are fixed** (T17 to T23, 2026-10-14 to 2026-10-18): 1 and 7 at `a69d030`, 10 at `99cc611`, 9 at `5daccbe` and `baa5277`, 2 and 3 at `07eaabe`, 4, 6 and 8 at `b416f50`, 5 at `14fa891`. Each failing reproduction moved from `client/e2e-pending/` into `client/e2e/` as a guard (the specs keep their `explore-N-` names), and the pending-spec setup (`client/e2e-pending/`, `playwright.pending.config.ts`, `npm run e2e:pending`) was removed on 2026-10-20 because nothing is pending any more. The text below is the pass as it was found.
 
 
 A member's-eye look at the built web client in a real browser, against a throwaway deployment with test data only, to find
@@ -103,7 +101,7 @@ Did: opened Chat with 300 messages. Expected: the page ends at the composer. Hap
 Cause: each message that continues a group carries `<time class="visually-hidden">`, `position: absolute`, and the log is
 `position: static` with `overflow: auto`, so those elements are not contained by it and each stretches the page by its place in
 the log. Repro: any member, a channel with enough messages for the log to scroll.
-Spec `client/e2e-pending/explore-1-feed-page-scroll-void.spec.ts`: `Expected: < 100  Received: 7242` ("pixels the page scrolls beyond the
+Spec `client/e2e/explore-1-feed-page-scroll-void.spec.ts` (was in `e2e-pending/`): `Expected: < 100  Received: 7242` ("pixels the page scrolls beyond the
 bottom of the composer, the last thing on it").
 
 **2. Rotating your own token destroys the new token.** **FIXED 2026-10-18 (`07eaabe`).** *Defect against the UI contract* (section 4: the "New token for
@@ -135,7 +133,7 @@ first message past the read pointer, and the member's own message is always newe
 Spec `explore-4-own-message-new-marker.spec.ts`: `Error: a "New messages" separator above Ann's own message ... Expected: 0
 Received: 1`.
 
-**5. "Load older messages" in a DM can load a page and show nothing.** *Usability.*
+**5. "Load older messages" in a DM can load a page and show nothing.** **FIXED 2026-10-18 (`14fa891`).** *Usability.*
 Did: as `hana` after a reload, opened "DM with kai" (a DM from four days ago), pressed "Load older messages"; again as the admin on
 "DM hana to kai". Expected: something visible changes. Happened: the button pages the whole repository (100 messages of every
 conversation), so the first press (here) fetched a page with none of this DM: the view is identical, the button stays, nothing
